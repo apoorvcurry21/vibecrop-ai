@@ -65,6 +65,11 @@ def gemini_fallback_models() -> list[str]:
     return [m.strip() for m in raw.split(",") if m.strip()]
 
 
+def enable_images() -> bool:
+    """Images are off for now (video-only MVP). Set ENABLE_IMAGES=1 to let Gemini plan image B-rolls."""
+    return os.environ.get("ENABLE_IMAGES", "").strip().lower() in {"1", "true", "yes"}
+
+
 def total_brolls() -> int:
     raw = os.environ.get("TOTAL_BROLLS", "").strip()
     return int(raw) if raw else DEFAULT_TOTAL_BROLLS

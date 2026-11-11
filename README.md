@@ -19,7 +19,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 
 - [x] Phase 1: Audio extraction and Groq transcription
 - [x] Phase 2: Gemini editor (context and planning)
-- [ ] Phase 3: Media sourcing and smart 9:16 formatting
+- [x] Phase 3: Media sourcing and smart 9:16 formatting (video only; images are deferred)
 - [ ] Phase 4: Streamlit mini-editor and caption export
 
 ## Setup
@@ -60,6 +60,27 @@ from the content. Each item has `asset_type`, `timestamp_start`, `timestamp_end`
 Python snaps times to spoken-word boundaries and rejects plans with overlaps, wrong durations (video 3-5 s,
 image 2-4 s), bad queries or gaps over 25 s, then asks Gemini to fix them (up to 3 attempts).
 The plan is a `draft` until the user approves it in the Phase 4 UI.
+
+## Phase 3: source clips and render
+
+```
+python -m src.sourcing.pipeline  D:\vibecrop_tmp\jobs\<job>
+python -m src.rendering.pipeline D:\vibecrop_tmp\jobs\<job> D:\vids\video.mp4
+```
+
+Sourcing searches YouTube with yt-dlp, skips very short/long/live results, and downloads only a 3-6 s
+section (about 25% into the video) at up to 1080p, video-only, so B-roll is silent by construction.
+If a download fails it tries the next result, then the alternative queries. Clip metadata (channel, URL,
+window) is written back into `plan.json`.
+
+Rendering (`final.mp4`, 1080x1920, 30 fps) center-crops each clip to 9:16 without stretching, lays it over the
+speaker only during its slot, never uses the clip's audio, and burns a small "Video: <channel>" credit line.
+A slot whose clip failed simply keeps the speaker on screen.
+
+Known limits: the clip window is chosen blindly, so some clips are off-topic (use the Phase 4 "Regenerate");
+some YouTube videos carry their own burned-in captions or watermarks; footage is third-party and copyrighted
+(credited, but you are responsible for how you publish it); YouTube may block downloads from cloud IPs.
+Images are off by default (`ENABLE_IMAGES=1` lets Gemini plan them; image sourcing is not built yet).
 
 ## Project layout
 

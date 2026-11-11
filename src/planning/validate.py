@@ -39,9 +39,11 @@ def snap_and_sort(items: list[BRollItem], words: list[dict], duration: float) ->
     return sorted((snap_item(i, words, duration) for i in items), key=lambda i: i.timestamp_start)
 
 
-def validate(items: list[BRollItem], total: int, duration: float) -> list[str]:
+def validate(items: list[BRollItem], total: int, duration: float, allow_images: bool = True) -> list[str]:
     """Return a list of human-readable problems; empty means the plan is valid."""
     errors: list[str] = []
+    if not allow_images and any(i.asset_type == "image" for i in items):
+        errors.append('Images are switched off: every item must have asset_type "video".')
     if len(items) != total:
         errors.append(f"Return exactly {total} items; you returned {len(items)}.")
     prev_end = None

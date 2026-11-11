@@ -19,6 +19,11 @@ TRANSCRIPT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _images_on(monkeypatch):
+    monkeypatch.setenv("ENABLE_IMAGES", "1")  # most tests exercise the mixed video/image plan
+
+
 def item(kind="video", start=10.0, end=14.0, **kw):
     base = dict(asset_type=kind, timestamp_start=start, timestamp_end=end,
                 search_query="stressed anxious person desk", alternative_queries=["a", "b"],
@@ -103,7 +108,7 @@ def test_falls_back_to_next_model_when_primary_fails(monkeypatch):
 
     used = []
 
-    def fake_generate(client, model, history, sleep):
+    def fake_generate(client, model, history, sleep, system_prompt):
         used.append(model)
         if model == "primary":
             raise PlanningError("503")
@@ -113,6 +118,23 @@ def test_falls_back_to_next_model_when_primary_fails(monkeypatch):
     monkeypatch.setattr(gemini_planner, "gemini_fallback_models", lambda: ["backup"])
     out = plan(TRANSCRIPT, total=10, model="primary", client=object())
     assert used == ["primary", "backup"] and out["model"] == "backup"
+
+
+def test_video_only_mode_rejects_images_then_accepts_videos(monkeypatch):
+    monkeypatch.delenv("ENABLE_IMAGES")
+    videos = [item("video", 5 + i * 9, 9 + i * 9) for i in range(10)]
+    client = FakeClient(reply(good_items()), reply(videos))  # first reply has images -> retry
+    out = plan(TRANSCRIPT, total=10, client=client)
+    assert {i["asset_type"] for i in out["items"]} == {"video"} and len(client.calls) == 2
+    assert "switched off" in client.calls[1][-1].parts[0].text
+
+
+def test_video_only_prompt_replaces_rule_one():
+    from src.planning.prompt import get_system_prompt
+
+    assert get_system_prompt(True) == SYSTEM_PROMPT
+    video_only = get_system_prompt(False)
+    assert "images are switched off" in video_only and "COUNT AND MIX" not in video_only
 
 
 def test_prompt_contains_key_rules_and_transcript():

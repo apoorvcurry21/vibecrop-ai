@@ -25,6 +25,23 @@ RULES
 8. Reply with JSON matching the schema and nothing else."""
 
 
+_VIDEO_ONLY_RULE_1 = (
+    '1. COUNT AND TYPE. Return exactly the number of B-roll items requested. Every item must have '
+    'asset_type "video" (images are switched off for now). Choose footage that exists as real video '
+    "clips: motion, action, emotion, atmosphere, scenes, events, named people in action."
+)
+
+
+def get_system_prompt(images: bool) -> str:
+    """Full prompt when images are enabled; otherwise rule 1 is swapped for the video-only version."""
+    if images:
+        return SYSTEM_PROMPT
+    lines = SYSTEM_PROMPT.split("\n")
+    idx = next(i for i, line in enumerate(lines) if line.startswith("1. COUNT AND MIX"))
+    lines[idx] = _VIDEO_ONLY_RULE_1
+    return "\n".join(lines)
+
+
 def build_user_prompt(transcript: dict, total: int) -> str:
     duration = transcript.get("video_duration") or transcript.get("duration")
     lines = [f"[{s['start']:.2f}-{s['end']:.2f}] {s['text']}" for s in transcript["segments"]]

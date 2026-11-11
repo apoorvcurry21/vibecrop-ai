@@ -7,8 +7,10 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from src.config import GEMINI_TIMEOUT_MS, gemini_fallback_models, gemini_model, get_secret, total_brolls
-from src.planning.prompt import SYSTEM_PROMPT, build_user_prompt
+from src.config import (
+    GEMINI_TIMEOUT_MS, enable_images, gemini_fallback_models, gemini_model, get_secret, total_brolls,
+)
+from src.planning.prompt import build_user_prompt, get_system_prompt
 from src.planning.schema import PlanResponse
 from src.planning.validate import snap_and_sort, validate
 
@@ -25,12 +27,13 @@ def _content(role: str, text: str):
     return types.Content(role=role, parts=[types.Part(text=text)])
 
 
-def _generate(client: Any, model: str, history: list, sleep: Callable[[float], None]) -> str:
+def _generate(client: Any, model: str, history: list, sleep: Callable[[float], None],
+              system_prompt: str) -> str:
     """One Gemini call; retries transient API errors (rate limit / overload) with backoff."""
     from google.genai import errors, types
 
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=system_prompt,
         response_mime_type="application/json",
         response_schema=PlanResponse,
         temperature=0.4,
@@ -47,9 +50,12 @@ def _generate(client: Any, model: str, history: list, sleep: Callable[[float], N
 
 
 def plan(transcript: dict, total: int | None = None, model: str | None = None, client: Any = None,
-         max_attempts: int = 3, sleep: Callable[[float], None] = time.sleep) -> dict:
+         max_attempts: int = 3, sleep: Callable[[float], None] = time.sleep,
+         images: bool | None = None) -> dict:
     """Ask Gemini for `total` B-rolls, snap them to word boundaries, validate, retry with feedback."""
     total = total or total_brolls()
+    images = enable_images() if images is None else images
+    system_prompt = get_system_prompt(images)
     models = [model or gemini_model()] + [m for m in gemini_fallback_models() if m != (model or gemini_model())]
     if client is None:
         from google import genai
@@ -68,7 +74,7 @@ def plan(transcript: dict, total: int | None = None, model: str | None = None, c
     for attempt in range(1, max_attempts + 1):
         while True:
             try:
-                text = _generate(client, models[0], history, sleep)
+                text = _generate(client, models[0], history, sleep, system_prompt)
                 break
             except PlanningError:
                 if len(models) == 1:
@@ -77,7 +83,7 @@ def plan(transcript: dict, total: int | None = None, model: str | None = None, c
         try:
             parsed = PlanResponse.model_validate(json.loads(text))
             items = snap_and_sort(parsed.items, transcript.get("words", []), duration)
-            errors = validate(items, total, duration)
+            errors = validate(items, total, duration, allow_images=images)
         except (json.JSONDecodeError, ValidationError) as exc:
             parsed, items, errors = None, [], [f"Your reply was not valid JSON for the schema: {exc}"]
         if not errors:
