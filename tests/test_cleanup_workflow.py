@@ -122,7 +122,8 @@ def test_create_job_copy_and_listing(tmp_path):
     job = workflow.create_job(src, "hi", copy_into_job=True, root=tmp_path)
     assert job.parent == tmp_path / "jobs" and (job / "source.mp4").read_bytes() == b"data"
     assert workflow.read_job_meta(job)["language"] == "hi"
-    assert workflow.list_jobs(tmp_path) == []  # no plan yet
+    assert workflow.list_jobs(tmp_path) == [job]  # unfinished jobs are listed so they can be resumed
+    (tmp_path / "jobs" / "stray_folder").mkdir()  # folders the app did not create are ignored
     (job / "plan.json").write_text("{}")
     assert workflow.list_jobs(tmp_path) == [job]
     with pytest.raises(workflow.WorkflowError):

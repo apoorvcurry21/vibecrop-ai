@@ -30,11 +30,12 @@ def jobs_root(root: Path | None = None) -> Path:
 
 
 def list_jobs(root: Path | None = None) -> list[Path]:
-    """Jobs that have a plan, newest first."""
+    """Jobs the app created (finished or resumable), newest first."""
     base = jobs_root(root)
     if not base.is_dir():
         return []
-    return sorted((p for p in base.iterdir() if (p / "plan.json").is_file()), key=lambda p: p.name, reverse=True)
+    return sorted((p for p in base.iterdir() if (p / "plan.json").is_file() or (p / "job.json").is_file()),
+                  key=lambda p: p.name, reverse=True)
 
 
 def read_job_meta(job_dir: Path) -> dict:

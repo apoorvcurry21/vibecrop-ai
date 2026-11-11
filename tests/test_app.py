@@ -28,6 +28,20 @@ def test_start_screen_renders_without_errors(tmp_path, monkeypatch):
     assert at.button[0].disabled  # "Build B-roll plan" needs a video first
 
 
+def test_reload_restores_the_job_from_the_url_and_ignores_path_tricks(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIBECROP_WORKDIR", str(tmp_path))
+    job = make_job(tmp_path)
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.query_params["job"] = job.name  # what a page reload looks like: no session, job id in the URL
+    at.run()
+    assert not at.exception and len([t for t in at.text_input if t.label == "Search query"]) == 3
+
+    evil = AppTest.from_file(APP, default_timeout=30)
+    evil.query_params["job"] = "..\\..\\Windows"
+    evil.run()
+    assert not evil.exception and any("Choose your video" in s.value for s in evil.subheader)
+
+
 def test_review_screen_shows_one_editable_row_per_item(tmp_path, monkeypatch):
     monkeypatch.setenv("VIBECROP_WORKDIR", str(tmp_path))
     job = make_job(tmp_path)

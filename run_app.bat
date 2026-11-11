@@ -1,0 +1,10 @@
+@echo off
+rem Starts VibeCrop AI with the project's own Python (the .venv), so all packages are found.
+cd /d "%~dp0"
+if not exist ".venv\Scripts\python.exe" (
+  echo The .venv folder is missing. Run:  python -m venv .venv ^&^& .venv\Scripts\pip install -r requirements.txt
+  pause
+  exit /b 1
+)
+".venv\Scripts\python.exe" -m streamlit run app.py
+pause

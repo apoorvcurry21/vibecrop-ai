@@ -1,19 +1,47 @@
 """VibeCrop AI - Streamlit mini-editor.  Run:  streamlit run app.py"""
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 
 import streamlit as st
 
-from src import config, workflow
-from src.captions.rewrite import MODES
-from src.cleanup import BUDGET_GB, fmt_bytes, over_budget, workdir_usage_bytes
-
 st.set_page_config(page_title="VibeCrop AI", page_icon="🎬", layout="wide")
+
+# Guard: running with the wrong Python (not the project's .venv) is the most common setup mistake.
+_missing = [m for m in ("groq", "google.genai", "yt_dlp", "dotenv") if importlib.util.find_spec(m) is None]
+if _missing:
+    st.title("VibeCrop AI")
+    st.error(f"Missing Python packages: {', '.join(_missing)}. This app is running with `{sys.executable}`, "
+             "which is not the project's virtual environment.")
+    st.write("Close this app (Ctrl+C in its terminal) and start it with the project's Python instead:")
+    st.code(f'cd "{Path(__file__).resolve().parent}"\n.\\.venv\\Scripts\\python.exe -m streamlit run app.py\n'
+            "# or just double-click run_app.bat")
+    st.stop()
+
+from src import config, workflow  # noqa: E402 - imported after the dependency guard on purpose
+from src.captions.rewrite import MODES  # noqa: E402
+from src.cleanup import BUDGET_GB, fmt_bytes, over_budget, workdir_usage_bytes  # noqa: E402
+
+
+def open_job(path: Path | None) -> None:
+    """Remember the open job in the session and in the URL, so a page reload comes back to it."""
+    if path is None:
+        st.session_state.pop("job_dir", None)
+        st.query_params.pop("job", None)
+    else:
+        st.session_state["job_dir"] = str(path)
+        st.query_params["job"] = path.name
 
 
 def job_dir() -> Path | None:
     raw = st.session_state.get("job_dir")
+    if not raw and st.query_params.get("job"):
+        # Only ever resolve to a folder directly inside <workdir>/jobs (the URL is user-controlled).
+        candidate = workflow.jobs_root() / Path(st.query_params["job"]).name
+        if candidate.is_dir():
+            st.session_state["job_dir"] = raw = str(candidate)
     return Path(raw) if raw and Path(raw).is_dir() else None
 
 
@@ -42,13 +70,14 @@ with st.sidebar:
     jobs = workflow.list_jobs()
     if jobs:
         st.divider()
-        chosen = st.selectbox("Open an earlier job", jobs, format_func=lambda p: p.name, index=None,
-                              placeholder="Choose a job...")
+        chosen = st.selectbox(
+            "Open an earlier job", jobs, index=None, placeholder="Choose a job...",
+            format_func=lambda p: p.name + ("" if (p / "plan.json").is_file() else "  (unfinished)"))
         if chosen and st.button("Open job"):
-            st.session_state["job_dir"] = str(chosen)
+            open_job(chosen)
             st.rerun()
     if job_dir() and st.button("Start a new video"):
-        st.session_state.pop("job_dir")
+        open_job(None)
         st.rerun()
 
 st.title("VibeCrop AI")
@@ -71,7 +100,7 @@ if job is None:
                 tmp.unlink(missing_ok=True)
             else:
                 new = workflow.create_job(local.strip().strip('"'), spoken)
-            st.session_state["job_dir"] = str(new)
+            open_job(new)
             st.rerun()
         except Exception as exc:  # noqa: BLE001 - show any setup problem to the user
             fail(exc)
@@ -91,8 +120,8 @@ if not plan_ready:
         except Exception as exc:  # noqa: BLE001
             status.update(label="Something went wrong", state="error")
             fail(exc)
-            st.info("Fix the problem (for example the API key in .env) and reload the page. "
-                    "The job resumes from where it stopped.")
+            st.info("Fix the problem (for example a missing API key in .env), then reload this page: "
+                    "the job resumes from the step that failed.")
     st.stop()
 
 # ---------------------------------------------------------------- step 3: review
