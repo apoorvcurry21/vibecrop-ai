@@ -118,6 +118,30 @@ def test_resolve_layout_leaves_impossible_plans_for_the_validator():
     assert validate(resolve_layout(items, words, 15.0), 10, 15.0)
 
 
+def test_creator_notes_reach_gemini_and_are_saved_in_the_plan():
+    notes = "The player is  Truls Moregard,\nSwedish table tennis."
+    client = FakeClient(reply(good_items()))
+    out = plan(TRANSCRIPT, total=10, client=client, notes=notes)
+    sent = client.calls[0][0].parts[0].text
+    assert "CREATOR NOTES" in sent and "The player is Truls Moregard, Swedish table tennis." in sent
+    assert out["notes"] == "The player is Truls Moregard, Swedish table tennis."
+    assert "CREATOR NOTES" not in build_user_prompt(TRANSCRIPT, 10)  # no notes -> no notes block
+
+
+def test_small_counts_relax_the_max_gap_rule():
+    from src.planning.prompt import max_gap_for
+
+    assert max_gap_for(10, 63.0) == 25.0 and max_gap_for(2, 120.0) == 120.0
+    wide = [BRollItem(**item("video", 10, 14)), BRollItem(**item("video", 70, 74))]  # 56 s apart
+    assert validate(wide, 2, DURATION) == []
+    assert any("No B-roll between" in e for e in validate(wide, 10, 80.0))
+
+
+def test_one_broll_is_a_valid_plan():
+    out = plan(TRANSCRIPT, total=1, client=FakeClient(reply([item("video", 40, 44)])))
+    assert len(out["items"]) == 1
+
+
 def test_validate_flags_bad_query():
     items = [BRollItem(**item(start=5.0, end=8.0, search_query="success", alternative_queries=["a"]))]
     errs = " ".join(validate(items, 1, DURATION))
@@ -126,7 +150,8 @@ def test_validate_flags_bad_query():
 
 def test_validate_flags_long_uncovered_stretch():
     items = [BRollItem(**item(start=5.0, end=8.0)), BRollItem(**item(start=60.0, end=63.0))]
-    assert any("No B-roll between" in e for e in validate(items, 2, DURATION))
+    assert any("No B-roll between" in e for e in validate(items, 10, DURATION))  # 10 planned: 52 s hole is too big
+    assert not any("No B-roll between" in e for e in validate(items, 2, DURATION))  # only 2 planned: fine
 
 
 def test_falls_back_to_next_model_when_primary_fails(monkeypatch):

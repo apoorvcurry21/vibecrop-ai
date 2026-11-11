@@ -115,6 +115,36 @@ def test_set_enabled_and_render_final_cleans(tmp_path, monkeypatch):
     assert workflow.load_plan(job)["status"] == "approved"
 
 
+def test_job_remembers_count_and_notes_and_pipeline_uses_them(tmp_path, monkeypatch):
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"v")
+    job = workflow.create_job(src, "hi", root=tmp_path, total=99, notes="  Truls\nMoregard ")
+    meta = workflow.read_job_meta(job)
+    assert meta["total_brolls"] == 10 and meta["notes"] == "Truls Moregard"  # clamped to 1-10, tidied
+    second = workflow.create_job(src, "hi", root=tmp_path, total=0)  # same video, same second: must not collide
+    assert second != job and workflow.read_job_meta(second)["total_brolls"] == 1
+
+    seen = {}
+    monkeypatch.setattr(workflow.transcription, "run",
+                        lambda video, lang, job_dir=None: (job_dir / "transcript.json").write_text("{}"))
+    monkeypatch.setattr(workflow.planning, "run", lambda j, total=None, notes="": seen.update(total=total, notes=notes)
+                        or (j / "plan.json").write_text(json.dumps({"items": []})))
+    monkeypatch.setattr(workflow.sourcing, "run", lambda j, log=print: None)
+    workflow.run_pipeline(job, log=lambda m: None)
+    assert seen == {"total": 10, "notes": "Truls Moregard"}
+
+
+def test_replan_clears_plan_clips_and_caption_cache_but_keeps_transcript(tmp_path):
+    job = make_job(tmp_path)
+    write_plan(job)
+    workflow.replan(job, 4, "  new   notes ")
+    assert sorted(p.name for p in job.iterdir()) == [
+        "audio.flac", "job.json", "overlays.ass", "source.mp4", "transcript.json"]
+    meta = workflow.read_job_meta(job)
+    assert meta["total_brolls"] == 4 and meta["notes"] == "new notes"
+    assert workflow.needs_pipeline(job)  # next run rebuilds the plan
+
+
 def test_needs_pipeline_resumes_unsourced_slots_only(tmp_path):
     job = tmp_path / "jobs" / "j"
     job.mkdir(parents=True)

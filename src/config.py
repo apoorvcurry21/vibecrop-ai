@@ -22,6 +22,7 @@ DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"  # 2.5-* models 404 for new keys; 3.7/
 DEFAULT_GEMINI_FALLBACKS = "gemini-3.1-flash-lite"
 GEMINI_TIMEOUT_MS = 120_000
 DEFAULT_TOTAL_BROLLS = 10  # the video/image split is chosen by Gemini, not fixed
+MAX_BROLLS = 10  # the user picks 1 to 10
 
 
 class ConfigError(RuntimeError):
@@ -70,9 +71,13 @@ def enable_images() -> bool:
     return os.environ.get("ENABLE_IMAGES", "").strip().lower() in {"1", "true", "yes"}
 
 
+def clamp_brolls(n: int) -> int:
+    return max(1, min(MAX_BROLLS, int(n)))
+
+
 def total_brolls() -> int:
     raw = os.environ.get("TOTAL_BROLLS", "").strip()
-    return int(raw) if raw else DEFAULT_TOTAL_BROLLS
+    return clamp_brolls(raw) if raw else DEFAULT_TOTAL_BROLLS
 
 
 def max_video_seconds() -> float:
@@ -94,7 +99,11 @@ def new_job_dir(video_path: str | os.PathLike, root: Path | None = None) -> Path
     """Create and return a fresh per-video job folder under the workdir root."""
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(video_path).stem).strip("_") or "video"
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    job = (root or workdir_root()) / "jobs" / f"{stamp}_{stem}"
+    base = (root or workdir_root()) / "jobs"
+    job, n = base / f"{stamp}_{stem}", 1
+    while job.exists():  # two jobs for the same video in one second (e.g. a double click)
+        n += 1
+        job = base / f"{stamp}_{stem}_{n}"
     job.mkdir(parents=True, exist_ok=False)
     return job
 

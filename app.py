@@ -56,9 +56,6 @@ with st.sidebar:
         "Spoken language", list(workflow.SPOKEN_LANGUAGES),
         format_func=lambda c: f"{workflow.SPOKEN_LANGUAGES[c]} ({c})", key="spoken",
     )
-    total_brolls = st.number_input(
-        "Number of B-rolls", min_value=3, max_value=14, value=config.total_brolls(),
-        help="Applies when a new plan is built. Short videos look better with fewer (about 1 per 8-10 seconds).")
     captions_on = st.checkbox("Burn in captions", value=True)
     caption_mode = st.radio("Caption language", list(MODES), format_func=MODES.get, disabled=not captions_on)
     auto_clean = st.checkbox(
@@ -93,16 +90,27 @@ if job is None:
     st.subheader("1. Choose your video")
     up = st.file_uploader("Upload a raw video (about 1-2 minutes)", type=["mp4", "mov", "mkv", "m4v"])
     local = st.text_input("...or the path of a video already on this PC", placeholder=r"D:\vids\my_video.mp4")
+    st.subheader("2. Tell the AI what you want")
+    count = st.slider("How many B-rolls?", min_value=1, max_value=config.MAX_BROLLS,
+                      value=config.total_brolls(),
+                      help="1 to 10. Short videos look better with fewer (about one per 8-10 seconds).")
+    notes = st.text_area(
+        "Notes for the AI (optional)", height=110,
+        placeholder="e.g. The player is Truls Moregard (Swedish table tennis). Show fast rallies and crowd "
+                    "reactions. Avoid podcasts and interviews.",
+        help="Anything that helps: correct spellings of names the speech recognition may mishear, the topic, "
+             "what you want to see, what to avoid. The AI treats this as correct and also uses it to spell "
+             "names right in the captions.")
     if st.button("Build B-roll plan", type="primary", disabled=not (up or local.strip())):
         try:
             if up:
                 tmp = config.workdir_root() / "uploads" / Path(up.name).name
                 tmp.parent.mkdir(parents=True, exist_ok=True)
                 tmp.write_bytes(up.getbuffer())
-                new = workflow.create_job(tmp, spoken, copy_into_job=True)
+                new = workflow.create_job(tmp, spoken, copy_into_job=True, total=count, notes=notes)
                 tmp.unlink(missing_ok=True)
             else:
-                new = workflow.create_job(local.strip().strip('"'), spoken)
+                new = workflow.create_job(local.strip().strip('"'), spoken, total=count, notes=notes)
             open_job(new)
             st.rerun()
         except Exception as exc:  # noqa: BLE001 - show any setup problem to the user
@@ -112,11 +120,11 @@ if job is None:
 # ---------------------------------------------------------------- step 2: build plan (resumable)
 meta = workflow.read_job_meta(job)
 if workflow.needs_pipeline(job):
-    st.subheader("2. Building your plan")
+    st.subheader("Building your plan")
     st.write(f"Video: **{meta.get('source_name', job.name)}**, language: **{meta.get('language')}**")
     with st.status("Transcribing, planning and downloading clips (a few minutes)...", expanded=True) as status:
         try:
-            workflow.run_pipeline(job, log=lambda m: status.write(m), total=int(total_brolls))
+            workflow.run_pipeline(job, log=lambda m: status.write(m))
             status.update(label="Plan ready", state="complete")
             st.rerun()
         except Exception as exc:  # noqa: BLE001
@@ -132,13 +140,23 @@ items = plan["items"]
 ready = sum(1 for i in items if (i.get("asset") or {}).get("status") == "ok" and i.get("enabled") is not False)
 final = job / "final.mp4"
 
-st.subheader("2. Review the plan")
+st.subheader("3. Review the plan")
 st.write(f"**{plan.get('video_topic', '')}**")
 st.caption(f"{ready} of {len(items)} B-roll clips ready. Edit a search query, press Regenerate for a different "
            "video, or remove a slot (the speaker stays on screen there).")
 
 if not any((job / (i.get("asset") or {}).get("path", "x")).is_file() for i in items) and final.is_file():
     st.info("This job has been rendered and its temporary clips were cleaned up.")
+
+with st.expander("Change the number of B-rolls or add notes, then re-plan"):
+    st.caption("This replaces the current plan and its downloaded clips (the transcript is kept).")
+    re_count = st.slider("How many B-rolls?", 1, config.MAX_BROLLS,
+                         value=config.clamp_brolls(meta.get("total_brolls") or len(items)), key="re_count")
+    re_notes = st.text_area("Notes for the AI (optional)", value=meta.get("notes", ""), key="re_notes", height=90,
+                            placeholder="Names, spellings, topic, what to show or avoid...")
+    if st.button("Re-plan with these settings"):
+        workflow.replan(job, re_count, re_notes)
+        st.rerun()
 
 for item in items:
     asset = item.get("asset") or {}
@@ -180,7 +198,7 @@ for item in items:
                 st.rerun()
 
 # ---------------------------------------------------------------- step 4: render
-st.subheader("3. Export")
+st.subheader("4. Export")
 if workflow.source_video_path(job) is None:
     path = st.text_input("The original video file for this job was not found. Enter its path:",
                          placeholder=r"D:\vids\my_video.mp4")

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from src.planning.prompt import (
-    IMAGE_MAX_S, IMAGE_MIN_S, INTRO_SAFE_S, MAX_GAP_S, MIN_GAP_S, VIDEO_MAX_S, VIDEO_MIN_S,
+    IMAGE_MAX_S, IMAGE_MIN_S, INTRO_SAFE_S, MIN_GAP_S, VIDEO_MAX_S, VIDEO_MIN_S, max_gap_for,
 )
 from src.planning.schema import BRollItem
 
@@ -84,6 +84,7 @@ def resolve_layout(items: list[BRollItem], words: list[dict], duration: float) -
 def validate(items: list[BRollItem], total: int, duration: float, allow_images: bool = True) -> list[str]:
     """Return a list of human-readable problems; empty means the plan is valid."""
     errors: list[str] = []
+    max_gap = max_gap_for(total, duration)
     if not allow_images and any(i.asset_type == "image" for i in items):
         errors.append('Images are switched off: every item must have asset_type "video".')
     if len(items) != total:
@@ -106,10 +107,10 @@ def validate(items: list[BRollItem], total: int, duration: float, allow_images: 
             errors.append(f"{tag} needs 2 alternative_queries.")
         if prev_end is not None and it.timestamp_start < prev_end + MIN_GAP_S - EPS:
             errors.append(f"{tag} overlaps or is closer than {MIN_GAP_S:g}s to the previous item.")
-        if prev_end is not None and it.timestamp_start - prev_end > MAX_GAP_S + EPS:
+        if prev_end is not None and it.timestamp_start - prev_end > max_gap + EPS:
             errors.append(
                 f"No B-roll between {prev_end:.1f}s and {it.timestamp_start:.1f}s; "
-                f"keep gaps under {MAX_GAP_S:g}s by adding or moving an item there."
+                f"keep gaps under {max_gap:.0f}s by moving an item there."
             )
         prev_end = it.timestamp_end
     return errors

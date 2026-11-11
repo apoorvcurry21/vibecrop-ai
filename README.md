@@ -88,8 +88,11 @@ Images are off by default (`ENABLE_IMAGES=1` lets Gemini plan them; image sourci
 streamlit run app.py        # then open http://localhost:8501
 ```
 
-1. Upload a video (or type a path to one on disk), pick the spoken language, press **Build B-roll plan**
-   (transcribe -> plan -> download clips; resumable if something fails).
+1. Upload a video (or type a path to one on disk), pick the spoken language, choose **how many B-rolls**
+   (1 to 10), and optionally add **notes for the AI** (correct names and spellings, topic, what to show or
+   avoid; the notes also fix name spellings in the captions). Press **Build B-roll plan**
+   (transcribe -> plan -> download clips; resumable if something fails). The review screen has a
+   "re-plan" box to change the count or notes later.
 2. **Review**: every B-roll has a playable preview, its timing, what the speaker says, and an editable
    search query. **Search with this query** fetches a new clip, **Regenerate asset** picks a different video
    for the same query, **Remove slot** keeps the speaker on screen there.

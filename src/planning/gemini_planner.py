@@ -28,8 +28,10 @@ def _generate(client: Any, model: str, history: list, sleep: Callable[[float], N
 
 def plan(transcript: dict, total: int | None = None, model: str | None = None, client: Any = None,
          max_attempts: int = 3, sleep: Callable[[float], None] = time.sleep,
-         images: bool | None = None) -> dict:
-    """Ask Gemini for `total` B-rolls, snap them to word boundaries, validate, retry with feedback."""
+         images: bool | None = None, notes: str = "") -> dict:
+    """Ask Gemini for `total` B-rolls, snap them to word boundaries, validate, retry with feedback.
+
+    `notes` are optional creator hints (correct names, topics, things to show or avoid)."""
     total = total or total_brolls()
     images = enable_images() if images is None else images
     system_prompt = get_system_prompt(images)
@@ -38,7 +40,7 @@ def plan(transcript: dict, total: int | None = None, model: str | None = None, c
         client = make_client()
 
     duration = float(transcript.get("video_duration") or transcript.get("duration") or 0.0)
-    history = [_content("user", build_user_prompt(transcript, total))]
+    history = [_content("user", build_user_prompt(transcript, total, notes))]
     errors: list[str] = []
 
     for attempt in range(1, max_attempts + 1):
@@ -63,6 +65,7 @@ def plan(transcript: dict, total: int | None = None, model: str | None = None, c
                 "video_duration": duration,
                 "model": models[0],  # the model that actually produced the plan
                 "video_topic": parsed.video_topic,
+                "notes": " ".join((notes or "").split()),
                 "status": "draft",  # becomes "approved" after the user reviews it in the UI
                 "items": [{"id": n, **it.model_dump()} for n, it in enumerate(items, 1)],
             }

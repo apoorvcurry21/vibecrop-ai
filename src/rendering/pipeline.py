@@ -56,7 +56,10 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
             raise RenderError(f"Unknown caption mode '{caption_mode}'.")
         transcript = json.loads((job_dir / "transcript.json").read_text(encoding="utf-8"))
         try:
-            chunks = load_caption_chunks(job_dir, caption_mode, transcript, plan.get("video_topic", ""), client, log)
+            context = plan.get("video_topic", "")
+            if plan.get("notes"):  # the creator's own spellings of names fix the caption text too
+                context += f". Creator notes (correct names/spellings): {plan['notes']}"
+            chunks = load_caption_chunks(job_dir, caption_mode, transcript, context, client, log)
         except CaptionError as exc:
             log(f"Caption rewrite failed ({exc}); using the original captions instead.")
             chunks = load_caption_chunks(job_dir, "original", transcript)

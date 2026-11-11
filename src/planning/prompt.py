@@ -19,7 +19,7 @@ RULES
    Only be literal when the speaker literally names a real person, place, event or object.
 3. LANGUAGE. The transcript may be Hindi, Hinglish, or English words spelled in Devanagari (for example "बैलन डियोर" means "Ballon d'Or"). Infer the correct names and terms from context. ALL search keywords, queries and English fields must be in English, Latin script, with proper names spelled correctly.
 4. SEARCH QUERY. search_query is ONE string of 3 to 6 plain words, concrete and filmable or photographable, written the way you would type into YouTube or an image search. Plain words only: no punctuation or apostrophes (write "Ballon dOr" as "Ballon d Or"). No lone abstract words such as "success" or "motivation". Prefer specific subjects ("Rafael Nadal Roland Garros trophy celebration"). Give exactly 2 alternative_queries, each a single string approaching the same idea from a different angle.
-5. TIMING. Use seconds from the transcript timestamps. Start where the relevant spoken words begin and end where they finish. A "video" item lasts {VIDEO_MIN_S:g}-{VIDEO_MAX_S:g} seconds; an "image" item lasts {IMAGE_MIN_S:g}-{IMAGE_MAX_S:g} seconds. Items must never overlap, keep at least {MIN_GAP_S:g} seconds between them, spread across the whole video (never leave more than {MAX_GAP_S:g} seconds without a B-roll, even if you must place a lighter illustration there), start no earlier than {INTRO_SAFE_S:g} seconds (the speaker owns the opening), and end before the video ends.
+5. TIMING. Use seconds from the transcript timestamps. Start where the relevant spoken words begin and end where they finish. A "video" item lasts {VIDEO_MIN_S:g}-{VIDEO_MAX_S:g} seconds; an "image" item lasts {IMAGE_MIN_S:g}-{IMAGE_MAX_S:g} seconds. Items must never overlap, keep at least {MIN_GAP_S:g} seconds between them, spread evenly across the whole video (never leave a longer stretch without a B-roll than the "Longest allowed stretch" stated in the request, even if you must place a lighter illustration there), start no earlier than {INTRO_SAFE_S:g} seconds (the speaker owns the opening), and end before the video ends.
 6. ALIGNMENT. Each B-roll must illustrate what the speaker is saying at exactly that moment.
 7. FIELDS. spoken_text = the transcript words covered (keep the original script). english_meaning = a short English rendering of them. reasoning = one sentence on why the visual fits the meaning. video_topic = one-line English summary of the whole video.
 8. Reply with JSON matching the schema and nothing else."""
@@ -42,12 +42,25 @@ def get_system_prompt(images: bool) -> str:
     return "\n".join(lines)
 
 
-def build_user_prompt(transcript: dict, total: int) -> str:
-    duration = transcript.get("video_duration") or transcript.get("duration")
+def max_gap_for(total: int, duration: float) -> float:
+    """Longest stretch allowed without B-roll: 25 s, relaxed for small counts (few items must spread wide)."""
+    return max(MAX_GAP_S, 2.0 * duration / max(total, 1))
+
+
+def build_user_prompt(transcript: dict, total: int, notes: str = "") -> str:
+    duration = float(transcript.get("video_duration") or transcript.get("duration") or 0.0)
     lines = [f"[{s['start']:.2f}-{s['end']:.2f}] {s['text']}" for s in transcript["segments"]]
+    notes = " ".join((notes or "").split())
+    notes_block = (
+        "CREATOR NOTES (written by the person who made this video; treat them as correct and use them: "
+        "exact names and spellings, topics, things they want shown or avoided. They override the "
+        f"transcript wherever the transcript misheard something):\n{notes}\n\n" if notes else ""
+    )
     return (
         f"Spoken language: {transcript.get('language', 'unknown')}\n"
         f"Video duration: {duration:.2f} seconds\n"
-        f"Plan exactly {total} B-roll items.\n\n"
+        f"Plan exactly {total} B-roll items.\n"
+        f"Longest allowed stretch without B-roll: {max_gap_for(total, duration):.0f} seconds.\n\n"
+        f"{notes_block}"
         "TRANSCRIPT\n" + "\n".join(lines)
     )

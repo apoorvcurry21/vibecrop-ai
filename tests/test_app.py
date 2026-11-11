@@ -26,6 +26,10 @@ def test_start_screen_renders_without_errors(tmp_path, monkeypatch):
     assert not at.exception
     assert any("Choose your video" in s.value for s in at.subheader)
     assert at.button[0].disabled  # "Build B-roll plan" needs a video first
+    slider = at.slider[0]
+    assert (slider.label, slider.min, slider.max, slider.value) == ("How many B-rolls?", 1, 10, 10)
+    notes = at.text_area[0]
+    assert notes.label == "Notes for the AI (optional)" and notes.value == ""  # optional: empty is fine
 
 
 def test_reload_restores_the_job_from_the_url_and_ignores_path_tricks(tmp_path, monkeypatch):
@@ -53,4 +57,6 @@ def test_review_screen_shows_one_editable_row_per_item(tmp_path, monkeypatch):
     labels = [b.label for b in at.button]
     assert labels.count("Regenerate asset") == 3 and labels.count("Remove slot") == 3
     assert any("No clip found" in w.value for w in at.warning)  # the failed item is flagged
+    assert at.expander[0].label.startswith("Change the number of B-rolls")
+    assert at.slider(key="re_count").value == 3  # no saved count -> falls back to the plan's size
     assert "Demo topic" in " ".join(m.value for m in at.markdown)
