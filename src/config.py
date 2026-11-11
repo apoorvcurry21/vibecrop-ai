@@ -18,6 +18,10 @@ load_dotenv()
 
 DEFAULT_WHISPER_MODEL = "whisper-large-v3-turbo"
 DEFAULT_MAX_VIDEO_SECONDS = 180  # reels are 1-2 min; small guard for headroom
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"  # 2.5-* models 404 for new keys; 3.7/3.8 timed out in testing
+DEFAULT_GEMINI_FALLBACKS = "gemini-3.1-flash-lite"
+GEMINI_TIMEOUT_MS = 120_000
+DEFAULT_TOTAL_BROLLS = 10  # the video/image split is chosen by Gemini, not fixed
 
 
 class ConfigError(RuntimeError):
@@ -48,6 +52,22 @@ def get_secret(name: str) -> str:
 
 def whisper_model() -> str:
     return os.environ.get("WHISPER_MODEL", "").strip() or DEFAULT_WHISPER_MODEL
+
+
+def gemini_model() -> str:
+    return os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL
+
+
+def gemini_fallback_models() -> list[str]:
+    """Models tried in order if the primary keeps failing (overload, 404). Comma-separated in .env."""
+    raw = os.environ.get("GEMINI_FALLBACK_MODELS")
+    raw = DEFAULT_GEMINI_FALLBACKS if raw is None else raw
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+def total_brolls() -> int:
+    raw = os.environ.get("TOTAL_BROLLS", "").strip()
+    return int(raw) if raw else DEFAULT_TOTAL_BROLLS
 
 
 def max_video_seconds() -> float:
