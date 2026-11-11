@@ -17,7 +17,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 
 ## Roadmap
 
-- [ ] Phase 1: Audio extraction and Groq transcription
+- [x] Phase 1: Audio extraction and Groq transcription
 - [ ] Phase 2: Gemini editor (context and planning)
 - [ ] Phase 3: Media sourcing and smart 9:16 formatting
 - [ ] Phase 4: Streamlit mini-editor and caption export
@@ -32,6 +32,20 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env   # then add your Groq and Gemini keys
 ```
+
+## Phase 1: transcribe a video
+
+```
+python -m src.transcription.pipeline path\to\video.mp4 --language en
+```
+
+Extracts 16 kHz mono FLAC audio, sends it to Groq Whisper (`whisper-large-v3-turbo` by default,
+override with `WHISPER_MODEL`), and saves `transcript.json` (segments + per-word timestamps) in a
+fresh job folder under `VIBECROP_WORKDIR`. The language is chosen by the user (ISO code, e.g. `en`, `hi`).
+
+On Colab, add `GROQ_API_KEY` / `GEMINI_API_KEY` under Secrets (Notebook access on); they are picked up automatically.
+
+Tests (no API key needed, Groq is mocked): `pip install -r requirements-dev.txt && pytest`
 
 ## Project layout
 
