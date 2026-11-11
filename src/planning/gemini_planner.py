@@ -7,46 +7,23 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from src.config import (
-    GEMINI_TIMEOUT_MS, enable_images, gemini_fallback_models, gemini_model, get_secret, total_brolls,
-)
+from src.config import enable_images, gemini_fallback_models, gemini_model, total_brolls
+from src.gemini_client import GeminiError, content as _content, generate, make_client
 from src.planning.prompt import build_user_prompt, get_system_prompt
 from src.planning.schema import PlanResponse
 from src.planning.validate import snap_and_sort, validate
-
-TRANSIENT_CODES = {429, 500, 503, 504}
 
 
 class PlanningError(RuntimeError):
     pass
 
 
-def _content(role: str, text: str):
-    from google.genai import types
-
-    return types.Content(role=role, parts=[types.Part(text=text)])
-
-
 def _generate(client: Any, model: str, history: list, sleep: Callable[[float], None],
               system_prompt: str) -> str:
-    """One Gemini call; retries transient API errors (rate limit / overload) with backoff."""
-    from google.genai import errors, types
-
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        response_mime_type="application/json",
-        response_schema=PlanResponse,
-        temperature=0.4,
-    )
-    for attempt in range(1, 5):
-        try:
-            return client.models.generate_content(model=model, contents=history, config=config).text or ""
-        except errors.APIError as exc:
-            if getattr(exc, "code", None) in TRANSIENT_CODES and attempt < 4:
-                sleep(5 * attempt)
-                continue
-            raise PlanningError(f"Gemini request failed: {exc}") from exc
-    raise PlanningError("Gemini request failed after retries.")
+    try:
+        return generate(client, model, history, sleep, system_prompt, PlanResponse)
+    except GeminiError as exc:
+        raise PlanningError(str(exc)) from exc
 
 
 def plan(transcript: dict, total: int | None = None, model: str | None = None, client: Any = None,
@@ -58,14 +35,7 @@ def plan(transcript: dict, total: int | None = None, model: str | None = None, c
     system_prompt = get_system_prompt(images)
     models = [model or gemini_model()] + [m for m in gemini_fallback_models() if m != (model or gemini_model())]
     if client is None:
-        from google import genai
-
-        from google.genai import types
-
-        client = genai.Client(
-            api_key=get_secret("GEMINI_API_KEY"),
-            http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),  # never hang silently
-        )
+        client = make_client()
 
     duration = float(transcript.get("video_duration") or transcript.get("duration") or 0.0)
     history = [_content("user", build_user_prompt(transcript, total))]

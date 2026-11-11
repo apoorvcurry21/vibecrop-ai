@@ -1,0 +1,6 @@
+[server]
+maxUploadSize = 2048  # MB; raw talking-head videos are often a few hundred MB
+headless = true
+
+[browser]
+gatherUsageStats = false

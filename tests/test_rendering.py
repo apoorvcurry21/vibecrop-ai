@@ -97,6 +97,47 @@ def test_missing_clip_leaves_speaker_visible(media, tmp_path):
     assert near(pixel(out, 3.5, 540, 960), (255, 0, 0))
 
 
+@needs_ffmpeg
+def test_removed_slot_keeps_speaker(media, tmp_path):
+    main, clip = media
+    job = tmp_path / "job"
+    (job / "clips").mkdir(parents=True)
+    shutil.copy(clip, job / "clips" / "clip_01.mp4")
+    (job / "plan.json").write_text(json.dumps({"items": [{
+        "id": 1, "asset_type": "video", "timestamp_start": 2.0, "timestamp_end": 5.0, "enabled": False,
+        "asset": {"status": "ok", "path": "clips/clip_01.mp4", "channel": "C"},
+    }]}), encoding="utf-8")
+    out = pipeline.run(job, main, log=lambda *_: None)
+    assert near(pixel(out, 3.5, 540, 960), (255, 0, 0))
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("script_word", ["hello", "नमस्ते"])
+def test_captions_are_burned_in_with_yellow_highlight(media, tmp_path, script_word):
+    main, _ = media
+    job = tmp_path / "job"
+    job.mkdir()
+    (job / "plan.json").write_text(json.dumps({"video_topic": "t", "items": []}), encoding="utf-8")
+    (job / "transcript.json").write_text(json.dumps({"language": "hi", "words": [
+        {"word": script_word, "start": 1.0, "end": 2.5}, {"word": "world", "start": 2.5, "end": 4.0}]}),
+        encoding="utf-8")
+    out = pipeline.run(job, main, caption_mode="original", log=lambda *_: None)
+
+    def band_counts(t):
+        raw = subprocess.run(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-ss", str(t), "-i", str(out), "-frames:v", "1",
+             "-vf", "format=rgb24,crop=1080:260:0:1330", "-f", "rawvideo", "-"],
+            capture_output=True, check=True).stdout
+        px = [raw[i:i + 3] for i in range(0, len(raw), 3)]
+        yellow = sum(p[0] > 200 and p[1] > 200 and p[2] < 90 for p in px)
+        white = sum(min(p) > 235 for p in px)
+        return yellow, white
+
+    yellow, white = band_counts(1.5)  # first word active: yellow word + white second word
+    assert yellow > 300 and white > 300
+    assert band_counts(0.5) == (0, 0)  # no caption before the first word
+
+
 def test_filtergraph_overlays_in_order_and_without_audio():
     g = build_filtergraph([Overlay(Path("a.mp4"), 1.0, 4.0), Overlay(Path("b.mp4"), 6.0, 9.0)], "credits.ass")
     assert "[b0][c1]overlay=enable='between(t,1.000,4.000)'" in g

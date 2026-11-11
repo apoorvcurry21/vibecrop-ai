@@ -20,7 +20,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 - [x] Phase 1: Audio extraction and Groq transcription
 - [x] Phase 2: Gemini editor (context and planning)
 - [x] Phase 3: Media sourcing and smart 9:16 formatting (video only; images are deferred)
-- [ ] Phase 4: Streamlit mini-editor and caption export
+- [x] Phase 4: Streamlit mini-editor and caption export
 
 ## Setup
 
@@ -81,6 +81,25 @@ Known limits: the clip window is chosen blindly, so some clips are off-topic (us
 some YouTube videos carry their own burned-in captions or watermarks; footage is third-party and copyrighted
 (credited, but you are responsible for how you publish it); YouTube may block downloads from cloud IPs.
 Images are off by default (`ENABLE_IMAGES=1` lets Gemini plan them; image sourcing is not built yet).
+
+## Phase 4: the Streamlit editor
+
+```
+streamlit run app.py        # then open http://localhost:8501
+```
+
+1. Upload a video (or type a path to one on disk), pick the spoken language, press **Build B-roll plan**
+   (transcribe -> plan -> download clips; resumable if something fails).
+2. **Review**: every B-roll has a playable preview, its timing, what the speaker says, and an editable
+   search query. **Search with this query** fetches a new clip, **Regenerate asset** picks a different video
+   for the same query, **Remove slot** keeps the speaker on screen there.
+3. **Approve and render**: burns captions (2-4 word chunks, active word in yellow) in the original language,
+   English, or Roman Hindi (Gemini rewrites the text; timings are kept), then deletes the temporary clips and
+   audio, keeping only `final.mp4` and the JSON files. The sidebar shows temp storage against a 32 GB budget.
+   Cleanup only ever touches job folders inside `VIBECROP_WORKDIR/jobs`.
+
+Windows uses Nirmala UI for Devanagari captions; on Linux/Colab install `fonts-noto-core`.
+CLI equivalent of the render step: `python -m src.rendering.pipeline <job> <video> --captions hinglish`.
 
 ## Project layout
 
