@@ -1,0 +1,30 @@
+# Secrets
+.env
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Temp / generated media (kept out of git; purged after render)
+workdir/
+temp/
+output/
+*.mp4
+*.mov
+*.mkv
+*.mp3
+*.wav
+*.m4a
+*.srt
+*.ass
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,7 @@
+streamlit
+groq
+google-genai
+yt-dlp
+ddgs
+requests
+python-dotenv
