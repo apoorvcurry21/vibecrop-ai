@@ -39,6 +39,48 @@ def snap_and_sort(items: list[BRollItem], words: list[dict], duration: float) ->
     return sorted((snap_item(i, words, duration) for i in items), key=lambda i: i.timestamp_start)
 
 
+def _clamp_len(item: BRollItem) -> float:
+    lo, hi = _bounds(item.asset_type)
+    return min(max(item.timestamp_end - item.timestamp_start, lo), hi)
+
+
+def resolve_layout(items: list[BRollItem], words: list[dict], duration: float) -> list[BRollItem]:
+    """Deterministically fix overlaps, tight gaps and overflow past the end, staying on word boundaries.
+
+    Forward pass pushes items later until they respect the minimum gap; backward pass pulls items that run
+    past the video end (or into the next item) earlier. If the plan cannot be made valid (e.g. too many
+    items for the video), the leftover problems are reported by `validate` so Gemini can be asked again.
+    """
+    starts = [w["start"] for w in words]
+    ends = [w["end"] for w in words]
+    out = [i.model_copy() for i in items]
+
+    prev_end: float | None = None
+    for it in out:
+        lo, hi = _bounds(it.asset_type)
+        length = _clamp_len(it)
+        earliest = INTRO_SAFE_S if prev_end is None else prev_end + MIN_GAP_S
+        s = it.timestamp_start
+        if s < earliest - EPS:
+            s = next((x for x in starts if x >= earliest - EPS), earliest)
+        fits = [e for e in ends if lo - EPS <= e - s <= hi + EPS]
+        e = _nearest(fits, s + length) if fits else s + length
+        it.timestamp_start, it.timestamp_end = round(s, 3), round(e, 3)
+        prev_end = e
+
+    limit = duration
+    for it in reversed(out):
+        if it.timestamp_end > limit + EPS:
+            lo, hi = _bounds(it.asset_type)
+            length = _clamp_len(it)
+            e = max((x for x in ends if x <= limit + EPS), default=limit)
+            fits = [x for x in starts if lo - EPS <= e - x <= hi + EPS]
+            s = _nearest(fits, e - length) if fits else e - length
+            it.timestamp_start, it.timestamp_end = round(s, 3), round(e, 3)
+        limit = it.timestamp_start - MIN_GAP_S
+    return out
+
+
 def validate(items: list[BRollItem], total: int, duration: float, allow_images: bool = True) -> list[str]:
     """Return a list of human-readable problems; empty means the plan is valid."""
     errors: list[str] = []

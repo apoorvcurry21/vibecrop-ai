@@ -115,6 +115,23 @@ def test_set_enabled_and_render_final_cleans(tmp_path, monkeypatch):
     assert workflow.load_plan(job)["status"] == "approved"
 
 
+def test_needs_pipeline_resumes_unsourced_slots_only(tmp_path):
+    job = tmp_path / "jobs" / "j"
+    job.mkdir(parents=True)
+    assert workflow.needs_pipeline(job)  # no plan yet
+
+    def plan(*items):
+        (job / "plan.json").write_text(json.dumps({"items": list(items)}), encoding="utf-8")
+
+    base = {"asset_type": "video", "timestamp_start": 1, "timestamp_end": 4}
+    plan({"id": 1, **base})  # planned, clip never downloaded
+    assert workflow.needs_pipeline(job)
+    plan({"id": 1, **base, "asset": {"status": "ok"}}, {"id": 2, **base, "asset": {"status": "failed"}})
+    assert not workflow.needs_pipeline(job)  # failed slots are the user's to fix, not auto-retried
+    plan({"id": 1, **base, "enabled": False}, {"id": 2, **base, "asset": {"status": "ok"}})
+    assert not workflow.needs_pipeline(job)  # removed slots are ignored
+
+
 def test_create_job_copy_and_listing(tmp_path):
     src = tmp_path / "in" / "My Clip.mp4"
     src.parent.mkdir()

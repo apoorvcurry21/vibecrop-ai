@@ -92,6 +92,32 @@ def test_validate_flags_overlap_and_intro_and_overrun():
     assert "before 1s" in errs and "overlaps" in errs and "after the video ends" in errs
 
 
+def test_resolve_layout_repairs_a_cluster_crammed_into_the_end():
+    """Regression: on a 63 s video Gemini put items 8-10 on top of each other at the very end."""
+    from src.planning.validate import resolve_layout, snap_and_sort
+
+    words = [{"word": "w", "start": round(i * 0.27, 3), "end": round(i * 0.27 + 0.22, 3)} for i in range(233)]
+    spans = [(3, 6.5), (9, 12.5), (15, 18.5), (21, 24.5), (27, 30.5), (33, 36.5), (39, 42.5),
+             (53.3, 56.5), (56.9, 60.0), (60.6, 63.05)]
+    items = [BRollItem(**item("video", s, e)) for s, e in spans]
+    dur = 63.05
+    broken = snap_and_sort(items, words, dur)
+    assert validate(broken, 10, dur)  # the raw plan really is invalid
+    fixed = resolve_layout(broken, words, dur)
+    assert validate(fixed, 10, dur) == [] and len(fixed) == 10
+    assert fixed[-1].timestamp_end <= dur and fixed[0].timestamp_start >= 1.0
+    starts = {w["start"] for w in words}
+    assert all(i.timestamp_start in starts for i in fixed[:-1])  # still on word boundaries
+
+
+def test_resolve_layout_leaves_impossible_plans_for_the_validator():
+    from src.planning.validate import resolve_layout
+
+    words = [{"word": "w", "start": round(i * 0.3, 3), "end": round(i * 0.3 + 0.25, 3)} for i in range(50)]
+    items = [BRollItem(**item("video", 1 + i, 4 + i)) for i in range(10)]  # 10 x 3 s cannot fit in 15 s
+    assert validate(resolve_layout(items, words, 15.0), 10, 15.0)
+
+
 def test_validate_flags_bad_query():
     items = [BRollItem(**item(start=5.0, end=8.0, search_query="success", alternative_queries=["a"]))]
     errs = " ".join(validate(items, 1, DURATION))

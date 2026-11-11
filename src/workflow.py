@@ -69,7 +69,16 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
     return job
 
 
-def run_pipeline(job_dir: Path, log: Callable[[str], None] = print) -> None:
+def needs_pipeline(job_dir: Path) -> bool:
+    """True if the job still has work to do: no plan yet, or video slots that were never sourced.
+    (Slots whose search failed are left for the user to fix, and rendered jobs keep their asset records.)"""
+    if not (job_dir / "plan.json").is_file():
+        return True
+    return any(i["asset_type"] == "video" and i.get("enabled") is not False and not i.get("asset")
+               for i in load_plan(job_dir).get("items", []))
+
+
+def run_pipeline(job_dir: Path, log: Callable[[str], None] = print, total: int | None = None) -> None:
     """Transcribe -> plan -> source clips. Each step is skipped if its output already exists (resumable)."""
     meta = read_job_meta(job_dir)
     video = source_video_path(job_dir)
@@ -80,7 +89,7 @@ def run_pipeline(job_dir: Path, log: Callable[[str], None] = print) -> None:
         transcription.run(video, meta["language"], job_dir=job_dir)
     if not (job_dir / "plan.json").is_file():
         log("Planning B-rolls with Gemini...")
-        planning.run(job_dir)
+        planning.run(job_dir, total=total)
     log("Downloading B-roll clips...")
     sourcing.run(job_dir, log=log)
 

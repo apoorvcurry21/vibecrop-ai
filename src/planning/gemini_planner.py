@@ -11,7 +11,7 @@ from src.config import enable_images, gemini_fallback_models, gemini_model, tota
 from src.gemini_client import GeminiError, content as _content, generate, make_client
 from src.planning.prompt import build_user_prompt, get_system_prompt
 from src.planning.schema import PlanResponse
-from src.planning.validate import snap_and_sort, validate
+from src.planning.validate import resolve_layout, snap_and_sort, validate
 
 
 class PlanningError(RuntimeError):
@@ -52,7 +52,8 @@ def plan(transcript: dict, total: int | None = None, model: str | None = None, c
                 models.pop(0)  # primary exhausted its retries: fall back to the next model
         try:
             parsed = PlanResponse.model_validate(json.loads(text))
-            items = snap_and_sort(parsed.items, transcript.get("words", []), duration)
+            words = transcript.get("words", [])
+            items = resolve_layout(snap_and_sort(parsed.items, words, duration), words, duration)
             errors = validate(items, total, duration, allow_images=images)
         except (json.JSONDecodeError, ValidationError) as exc:
             parsed, items, errors = None, [], [f"Your reply was not valid JSON for the schema: {exc}"]

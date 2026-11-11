@@ -56,6 +56,9 @@ with st.sidebar:
         "Spoken language", list(workflow.SPOKEN_LANGUAGES),
         format_func=lambda c: f"{workflow.SPOKEN_LANGUAGES[c]} ({c})", key="spoken",
     )
+    total_brolls = st.number_input(
+        "Number of B-rolls", min_value=3, max_value=14, value=config.total_brolls(),
+        help="Applies when a new plan is built. Short videos look better with fewer (about 1 per 8-10 seconds).")
     captions_on = st.checkbox("Burn in captions", value=True)
     caption_mode = st.radio("Caption language", list(MODES), format_func=MODES.get, disabled=not captions_on)
     auto_clean = st.checkbox(
@@ -107,14 +110,13 @@ if job is None:
     st.stop()
 
 # ---------------------------------------------------------------- step 2: build plan (resumable)
-plan_ready = (job / "plan.json").is_file()
 meta = workflow.read_job_meta(job)
-if not plan_ready:
+if workflow.needs_pipeline(job):
     st.subheader("2. Building your plan")
     st.write(f"Video: **{meta.get('source_name', job.name)}**, language: **{meta.get('language')}**")
     with st.status("Transcribing, planning and downloading clips (a few minutes)...", expanded=True) as status:
         try:
-            workflow.run_pipeline(job, log=lambda m: status.write(m))
+            workflow.run_pipeline(job, log=lambda m: status.write(m), total=int(total_brolls))
             status.update(label="Plan ready", state="complete")
             st.rerun()
         except Exception as exc:  # noqa: BLE001
