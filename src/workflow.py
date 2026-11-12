@@ -10,6 +10,7 @@ from typing import Callable
 from src import config
 from src.cleanup import purge_job_temp
 from src.planning import pipeline as planning
+from src.planning import recommend
 from src.planning.layouts import LAYOUTS, STYLES, assign_layouts
 from src.planning.prompt import INTRO_SAFE_S
 from src.rendering import framing as framing_mod
@@ -85,6 +86,56 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
                    total_brolls=config.clamp_brolls(config.total_brolls() if total is None else total),
                    notes=" ".join((notes or "").split()), style=style)
     return job
+
+
+def analyse(job_dir: Path, log: Callable[[str], None] = print) -> dict:
+    """First step after a video is chosen: transcribe it (reused later by planning), then ask Gemini how many
+    B-rolls suit it. The suggestion is stored in job.json so the slider can be preset (and survives a reload)."""
+    meta = read_job_meta(job_dir)
+    video = source_video_path(job_dir)
+    if video is None:
+        raise WorkflowError("The source video for this job is missing.")
+    if not (job_dir / "transcript.json").is_file():
+        log("Transcribing audio with Groq Whisper...")
+        transcription.run(video, meta["language"], job_dir=job_dir)
+    transcript = json.loads((job_dir / "transcript.json").read_text(encoding="utf-8"))
+    log("Asking Gemini how many B-rolls suit this video...")
+    suggestion = recommend.recommend_count(transcript)
+    write_job_meta(job_dir, suggested_brolls=suggestion["count"], suggested_reason=suggestion["reason"],
+                   suggested_source=suggestion["source"],
+                   video_duration=float(transcript.get("video_duration") or transcript.get("duration") or 0.0))
+    return suggestion
+
+
+def set_language(job_dir: Path, language: str) -> None:
+    """The spoken language changed: the transcript (and anything derived from it) no longer applies."""
+    if read_job_meta(job_dir).get("language") == language:
+        return
+    write_job_meta(job_dir, language=language)
+    for name in ("transcript.json", "plan.json", "final.mp4"):
+        (job_dir / name).unlink(missing_ok=True)
+    for cache in job_dir.glob("captions_*.json"):
+        cache.unlink()
+    shutil.rmtree(job_dir / "clips", ignore_errors=True)
+    meta = read_job_meta(job_dir)
+    for key in ("suggested_brolls", "suggested_reason", "suggested_source"):
+        meta.pop(key, None)
+    (job_dir / "job.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def discard_draft(job_dir: Path | None) -> None:
+    """Delete a job that was only analysed (never planned), e.g. because another video replaced it."""
+    if (job_dir and job_dir.parent.name == "jobs" and (job_dir / "job.json").is_file()
+            and not (job_dir / "plan.json").is_file()):  # only ever a job folder the app made, never a plan
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def start_planning(job_dir: Path, total: int, notes: str, style: str) -> None:
+    """The user pressed 'Build B-roll plan': remember the chosen count, notes and video style."""
+    if style not in STYLES:
+        raise WorkflowError(f"Unknown video style '{style}'.")
+    write_job_meta(job_dir, total_brolls=config.clamp_brolls(total), notes=" ".join((notes or "").split()),
+                   style=style)
 
 
 def replan(job_dir: Path, total: int, notes: str) -> None:
