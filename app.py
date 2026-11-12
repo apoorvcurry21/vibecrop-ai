@@ -23,6 +23,7 @@ if _missing:
 from src import config, workflow  # noqa: E402 - imported after the dependency guard on purpose
 from src.captions.rewrite import MODES  # noqa: E402
 from src.cleanup import BUDGET_GB, fmt_bytes, over_budget, workdir_usage_bytes  # noqa: E402
+from src.planning.prompt import feasible_max  # noqa: E402
 
 
 def open_job(path: Path | None) -> None:
@@ -93,7 +94,7 @@ if job is None:
     st.subheader("2. Tell the AI what you want")
     count = st.slider("How many B-rolls?", min_value=1, max_value=config.MAX_BROLLS,
                       value=config.total_brolls(),
-                      help="1 to 10. Short videos look better with fewer (about one per 8-10 seconds).")
+                      help="1 to 15. Short videos look better with fewer (about one per 8-10 seconds).")
     notes = st.text_area(
         "Notes for the AI (optional)", height=110,
         placeholder="e.g. The player is Truls Moregard (Swedish table tennis). Show fast rallies and crowd "
@@ -152,6 +153,10 @@ with st.expander("Change the number of B-rolls or add notes, then re-plan"):
     st.caption("This replaces the current plan and its downloaded clips (the transcript is kept).")
     re_count = st.slider("How many B-rolls?", 1, config.MAX_BROLLS,
                          value=config.clamp_brolls(meta.get("total_brolls") or len(items)), key="re_count")
+    fits = feasible_max(float(plan.get("video_duration") or 0))
+    if re_count > fits:
+        st.warning(f"Only about {fits} B-rolls physically fit in this video (3 s minimum each). "
+                   "Asking for more may make planning fail.")
     re_notes = st.text_area("Notes for the AI (optional)", value=meta.get("notes", ""), key="re_notes", height=90,
                             placeholder="Names, spellings, topic, what to show or avoid...")
     if st.button("Re-plan with these settings"):

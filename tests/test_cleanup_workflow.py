@@ -120,7 +120,7 @@ def test_job_remembers_count_and_notes_and_pipeline_uses_them(tmp_path, monkeypa
     src.write_bytes(b"v")
     job = workflow.create_job(src, "hi", root=tmp_path, total=99, notes="  Truls\nMoregard ")
     meta = workflow.read_job_meta(job)
-    assert meta["total_brolls"] == 10 and meta["notes"] == "Truls Moregard"  # clamped to 1-10, tidied
+    assert meta["total_brolls"] == 15 and meta["notes"] == "Truls Moregard"  # clamped to 1-15, tidied
     second = workflow.create_job(src, "hi", root=tmp_path, total=0)  # same video, same second: must not collide
     assert second != job and workflow.read_job_meta(second)["total_brolls"] == 1
 
@@ -131,7 +131,7 @@ def test_job_remembers_count_and_notes_and_pipeline_uses_them(tmp_path, monkeypa
                         or (j / "plan.json").write_text(json.dumps({"items": []})))
     monkeypatch.setattr(workflow.sourcing, "run", lambda j, log=print: None)
     workflow.run_pipeline(job, log=lambda m: None)
-    assert seen == {"total": 10, "notes": "Truls Moregard"}
+    assert seen == {"total": 15, "notes": "Truls Moregard"}
 
 
 def test_replan_clears_plan_clips_and_caption_cache_but_keeps_transcript(tmp_path):

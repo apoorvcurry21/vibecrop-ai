@@ -31,7 +31,7 @@ def run(transcript_path: str | Path, total: int | None = None, model: str | None
 def main() -> None:
     parser = argparse.ArgumentParser(description="VibeCrop AI - Phase 2 Gemini planning")
     parser.add_argument("job", help="Job folder or transcript.json from Phase 1")
-    parser.add_argument("--total", type=int, default=None, help="Number of B-rolls (default 10)")
+    parser.add_argument("--total", type=int, default=None, help="Number of B-rolls, 1-15 (default 10)")
     parser.add_argument("--model", default=None, help="Override the Gemini model")
     parser.add_argument("--notes", default="", help="Optional hints for the AI: names, topics, things to show")
     args = parser.parse_args()

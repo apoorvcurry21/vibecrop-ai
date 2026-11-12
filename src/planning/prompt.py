@@ -47,6 +47,14 @@ def max_gap_for(total: int, duration: float) -> float:
     return max(MAX_GAP_S, 2.0 * duration / max(total, 1))
 
 
+def feasible_max(duration: float) -> int:
+    """Most video B-rolls that physically fit: an intro-safe start, then n shortest clips with a gap between.
+
+    Used to warn about / clamp counts that the planner could never satisfy (e.g. 15 clips in a 30 s reel)."""
+    n = int((duration - INTRO_SAFE_S + MIN_GAP_S) // (VIDEO_MIN_S + MIN_GAP_S))
+    return max(1, n)
+
+
 def build_user_prompt(transcript: dict, total: int, notes: str = "") -> str:
     duration = float(transcript.get("video_duration") or transcript.get("duration") or 0.0)
     lines = [f"[{s['start']:.2f}-{s['end']:.2f}] {s['text']}" for s in transcript["segments"]]

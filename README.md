@@ -1,8 +1,8 @@
 # VibeCrop AI
 
 An automated AI video editor for short-form content (Instagram Reels / YouTube Shorts, 1-2 minutes).
-Upload a raw talking-head video. VibeCrop AI transcribes it, plans 10 contextual B-rolls
-(6 video clips + 4 images), lets you review and tweak the plan, then renders a vertical 9:16
+Upload a raw talking-head video. VibeCrop AI transcribes it, plans contextual B-rolls
+(1 to 15, your choice), lets you review and tweak the plan, then renders a vertical 9:16
 video with burned-in captions.
 
 Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
@@ -10,7 +10,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 ## Pipeline
 
 1. **Transcription** - Groq API (Whisper) gives word- and sentence-level timestamps.
-2. **Planning** - Gemini (free tier) reads the transcript and outputs a strict JSON timeline of 10 B-roll slots.
+2. **Planning** - Gemini (free tier) reads the transcript and outputs a strict JSON timeline of 1-15 B-roll slots (default 10).
 3. **Sourcing** - `yt-dlp --download-sections` pulls 3-5 s clips; DuckDuckGo / Unsplash supply images.
 4. **Rendering** - FFmpeg center-crops to 9:16, mutes B-roll audio, overlays on the main track, burns captions.
 5. **UI** - Streamlit dashboard to edit queries / regenerate assets before export; temp files are purged after render.
@@ -54,7 +54,7 @@ python -m src.planning.pipeline D:\vibecrop_tmp\jobs\<job folder>
 ```
 
 Gemini (`GEMINI_MODEL`, default `gemini-3.5-flash`, with `GEMINI_FALLBACK_MODELS` if it is overloaded)
-reads `transcript.json` and writes `plan.json`: 10 B-rolls (`TOTAL_BROLLS`). Gemini decides the video/image mix
+reads `transcript.json` and writes `plan.json`: 1-15 B-rolls (`TOTAL_BROLLS`, default 10). Gemini decides the video/image mix
 from the content. Each item has `asset_type`, `timestamp_start`, `timestamp_end`, a `search_query` and two
 `alternative_queries`. The prompt forbids literal readings of metaphors ("hit a wall" -> "stressed anxious person").
 Python snaps times to spoken-word boundaries and rejects plans with overlaps, wrong durations (video 3-5 s,
@@ -89,7 +89,7 @@ streamlit run app.py        # then open http://localhost:8501
 ```
 
 1. Upload a video (or type a path to one on disk), pick the spoken language, choose **how many B-rolls**
-   (1 to 10), and optionally add **notes for the AI** (correct names and spellings, topic, what to show or
+   (1 to 15), and optionally add **notes for the AI** (correct names and spellings, topic, what to show or
    avoid; the notes also fix name spellings in the captions). Press **Build B-roll plan**
    (transcribe -> plan -> download clips; resumable if something fails). The review screen has a
    "re-plan" box to change the count or notes later.

@@ -27,7 +27,7 @@ def test_start_screen_renders_without_errors(tmp_path, monkeypatch):
     assert any("Choose your video" in s.value for s in at.subheader)
     assert at.button[0].disabled  # "Build B-roll plan" needs a video first
     slider = at.slider[0]
-    assert (slider.label, slider.min, slider.max, slider.value) == ("How many B-rolls?", 1, 10, 10)
+    assert (slider.label, slider.min, slider.max, slider.value) == ("How many B-rolls?", 1, 15, 10)
     notes = at.text_area[0]
     assert notes.label == "Notes for the AI (optional)" and notes.value == ""  # optional: empty is fine
 

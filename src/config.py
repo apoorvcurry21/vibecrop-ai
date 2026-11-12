@@ -22,7 +22,7 @@ DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"  # 2.5-* models 404 for new keys; 3.7/
 DEFAULT_GEMINI_FALLBACKS = "gemini-3.1-flash-lite"
 GEMINI_TIMEOUT_MS = 120_000
 DEFAULT_TOTAL_BROLLS = 10  # the video/image split is chosen by Gemini, not fixed
-MAX_BROLLS = 10  # the user picks 1 to 10
+MAX_BROLLS = 15  # the user picks 1 to 15 (hard cap)
 
 
 class ConfigError(RuntimeError):

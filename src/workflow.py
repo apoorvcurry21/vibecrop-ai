@@ -58,7 +58,7 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
                root: Path | None = None, total: int | None = None, notes: str = "") -> Path:
     """Create a job folder for a video. `copy_into_job=True` is for uploads (the copy is purged on cleanup).
 
-    `total` (1-10) is how many B-rolls to plan; `notes` are optional creator hints for the AI."""
+    `total` (1-15) is how many B-rolls to plan; `notes` are optional creator hints for the AI."""
     video_path = Path(video_path)
     if not video_path.is_file():
         raise WorkflowError(f"Video not found: {video_path}")

@@ -201,3 +201,10 @@ def test_pipeline_writes_plan_json(tmp_path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert out.name == "plan.json" and data["source_transcript"] == "transcript.json"
     assert [i["id"] for i in data["items"]] == list(range(1, 11))
+
+
+def test_feasible_max_reflects_how_many_clips_physically_fit():
+    from src.planning.prompt import feasible_max
+    assert feasible_max(30.0) == 8       # 1 s intro + 8 x 3 s clips + 7 x 0.5 s gaps = 28.5 s
+    assert feasible_max(60.0) == 17      # more than the 15 cap, so the cap is what limits a 60 s reel
+    assert feasible_max(2.0) == 1        # never below 1
