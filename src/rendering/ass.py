@@ -8,7 +8,7 @@ from pathlib import Path
 OUT_W, OUT_H = 1080, 1920
 # Split slots: captions are centred on the border line (alignment 5 = middle of the screen) and the credit
 # sits just above the border, at the bottom of the b-roll half.
-SPLIT_CREDIT_MARGIN_V = OUT_H // 2 + 40
+SPLIT_CREDIT_MARGIN_V = OUT_H // 2 + 120
 WHITE, YELLOW = "&H00FFFFFF&", "&H0000FFFF&"  # ASS colours are BGR
 DEVANAGARI = re.compile("[ऀ-ॿ]")
 LATIN_FONT = "Arial"
@@ -61,7 +61,8 @@ def credit_event(start: float, end: float, channel: str, split: bool = False) ->
 def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | None = None) -> list[str]:
     """One event per spoken word: the whole chunk is shown, the active word is yellow.
 
-    Words that start inside a split slot (`split_spans`) use the centred-on-the-border caption style."""
+    Time inside a split slot (`split_spans`) uses the centred-on-the-border caption style. A word that straddles
+    a slot boundary is cut there, so the caption moves exactly when the layout changes."""
     spans = split_spans or []
     events: list[str] = []
     for ci, chunk in enumerate(chunks):
@@ -72,7 +73,6 @@ def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | 
         next_start = chunks[ci + 1]["words"][0]["start"] if ci + 1 < len(chunks) and chunks[ci + 1]["words"] else None
         for i, w in enumerate(words):
             start = w["start"]
-            style = base_style + ("Split" if any(a <= start < b for a, b in spans) else "")
             if i + 1 < len(words):
                 end = words[i + 1]["start"]
             else:
@@ -84,7 +84,11 @@ def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | 
                 f"{{\\c{YELLOW}}}{escape(x['text'])}{{\\c{WHITE}}}" if j == i else escape(x["text"])
                 for j, x in enumerate(words)
             )
-            events.append(f"Dialogue: 1,{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{line}")
+            cuts = sorted({c for span in spans for c in span if start < c < end})
+            points = [start, *cuts, end]
+            for seg_start, seg_end in zip(points, points[1:]):
+                style = base_style + ("Split" if any(a <= seg_start < b for a, b in spans) else "")
+                events.append(f"Dialogue: 1,{ass_time(seg_start)},{ass_time(seg_end)},{style},,0,0,0,,{line}")
     return events
 
 

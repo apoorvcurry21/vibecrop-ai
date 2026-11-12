@@ -227,3 +227,15 @@ def test_pipeline_passes_layout_and_framing_and_facecam_focus(media, tmp_path):
     out = pipeline.run(job, main, credits=False, caption_mode=None, log=lambda m: None)
     assert near(pixel(out, 3.5, 540, 400), (0, 0, 255))  # top: b-roll
     assert near(pixel(out, 3.5, 540, 1500), (255, 255, 0))  # face_y=0 -> facecam starts at speaker row 0: yellow
+
+
+def test_a_caption_straddling_a_slot_boundary_switches_position_at_the_boundary():
+    from src.rendering.ass import caption_events
+    chunks = [{"start": 4.0, "end": 5.5, "words": [{"text": "of", "start": 4.0, "end": 4.3},
+                                                    {"text": "video", "start": 4.35, "end": 4.9},
+                                                    {"text": "now", "start": 5.0, "end": 5.4}]}]
+    ev = caption_events(chunks, split_spans=[(4.5, 8.0)])
+    # the "video" word runs 4.35 -> 5.0 and crosses 4.5: normal style first, then the split style
+    styles = [e.split(",")[3] for e in ev]
+    assert styles[:3] == ["CaptionLatin", "CaptionLatin", "CaptionLatinSplit"] and ev[1].split(",")[2] == "0:00:04.50"
+    assert ev[2].split(",")[1] == "0:00:04.50"

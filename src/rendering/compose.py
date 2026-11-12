@@ -98,7 +98,7 @@ def build_filtergraph(overlays: list[Overlay], subtitles_file: str | None = None
 
 def render(main_video: Path, overlays: list[Overlay], out_path: Path,
            subtitles_file: str | None = None, cwd: Path | None = None,
-           face_y: float = DEFAULT_FACE_Y) -> Path:
+           face_y: float = DEFAULT_FACE_Y, preset: str = "veryfast", crf: int = 20) -> Path:
     """Render the final video. Only the main video's audio is used: B-roll audio is never mapped.
 
     `subtitles_file` must be relative to `cwd` (avoids Windows drive-letter escaping in filters).
@@ -114,7 +114,7 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
     cmd += [
         "-filter_complex", build_filtergraph(overlays, subtitles_file, face_y),
         "-map", "[v]", "-map", "0:a:0?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
         str(out_path),
     ]

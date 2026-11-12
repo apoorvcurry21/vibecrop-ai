@@ -21,6 +21,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 - [x] Phase 2: Gemini editor (context and planning)
 - [x] Phase 3: Media sourcing and smart 9:16 formatting (video only; images are deferred)
 - [x] Phase 4: Streamlit mini-editor and caption export
+- [x] Phase 5: AI count suggestion, video styles (overlay / split / hybrid), timeline editing, zoom/pan framing
 
 ## Setup
 
@@ -88,18 +89,42 @@ Images are off by default (`ENABLE_IMAGES=1` lets Gemini plan them; image sourci
 streamlit run app.py        # then open http://localhost:8501
 ```
 
-1. Upload a video (or type a path to one on disk), pick the spoken language, choose **how many B-rolls**
-   (1 to 15), and optionally add **notes for the AI** (correct names and spellings, topic, what to show or
-   avoid; the notes also fix name spellings in the captions). Press **Build B-roll plan**
-   (transcribe -> plan -> download clips; resumable if something fails). The review screen has a
-   "re-plan" box to change the count or notes later.
+1. Upload a video (or type a path to one on disk) and pick the spoken language. The app **analyses it
+   straight away**: it transcribes the speech and Gemini suggests how many B-rolls suit this reel (shown as
+   "AI suggests N: reason", and the slider is preset to it). Then choose a **video style** (see below), adjust
+   **how many B-rolls** (1 to 15; you can change the AI's number), and optionally add **notes for the AI**
+   (correct names and spellings, topic, what to show or avoid; the notes also fix name spellings in the
+   captions). Press **Build B-roll plan** (plan -> download clips; the transcript from the analysis is reused;
+   resumable if something fails). The review screen has a "re-plan" box to change the count or notes later.
+   If Gemini is unavailable the suggestion falls back to about one B-roll per 8 seconds.
 2. **Review**: every B-roll has a playable preview, its timing, what the speaker says, and an editable
    search query. **Search with this query** fetches a new clip, **Regenerate asset** picks a different video
    for the same query, **Remove slot** keeps the speaker on screen there.
-3. **Approve and render**: burns captions (2-4 word chunks, active word in yellow) in the original language,
+3. **Edit a slot** (switch on "Edit layout, timing, order and framing" on its row):
+   - **Layout** per slot: *overlay* (the clip fills the screen) or *split* (see styles).
+   - **Timing**: drag the start/end, or nudge by 0.1 s. A slot cannot overlap its neighbours, start before 1 s
+     or run longer than its downloaded clip (the app downloads a few seconds of headroom; **Fetch longer
+     clip** re-downloads, which may pick a different video).
+   - **Order**: *Swap with previous / next* trades the clips between slots (timings and layouts stay).
+   - **Framing (zoom and pan)**: a start and an end keyframe, each with zoom (1x to 3x) and pan left/right/up/down;
+     the clip animates smoothly between them (Ken Burns). Presets: Zoom in, Zoom out, Hold.
+     **Preview as 9:16** shows the first and last frame exactly as exported; **16:9** shows the whole source
+     clip with the crop outlined (solid = start, dashed = end, dimmed = cut off). **Play preview with the
+     speaker** renders a quick real clip of that slot with the same code as the final export.
+4. **Approve and render**: burns captions (2-4 word chunks, active word in yellow) in the original language,
    English, or Roman Hindi (Gemini rewrites the text; timings are kept), then deletes the temporary clips and
    audio, keeping only `final.mp4` and the JSON files. The sidebar shows temp storage against a 32 GB budget.
    Cleanup only ever touches job folders inside `VIBECROP_WORKDIR/jobs`.
+
+### Video styles
+
+| Style | Look |
+|---|---|
+| **Overlay** | The b-roll covers the whole 9:16 frame while your voice keeps running (the original look). |
+| **Split** | The b-roll fills the top half, your facecam the bottom half, with a thin white border between. Captions sit on the border and the credit just above it. "Facecam focus" chooses which part of the speaker video is shown. |
+| **Hybrid** | A mix. Gemini picks a layout per b-roll (short punchy visuals full screen, longer explanatory ones split; never more than 3 in a row) and you can change any slot. |
+
+"Apply this style to all slots" (review screen) resets every slot to a style. Output is always 1080x1920.
 
 Windows uses Nirmala UI for Devanagari captions; on Linux/Colab install `fonts-noto-core`.
 CLI equivalent of the render step: `python -m src.rendering.pipeline <job> <video> --captions hinglish`.
@@ -111,5 +136,5 @@ src/
   transcription/   # Phase 1
   planning/        # Phase 2
   sourcing/        # Phase 3
-  rendering/       # Phase 3-4
+  rendering/       # Phase 3-5 (compose.py = layouts, framing.py = zoom/pan maths, preview.py = editor previews)
 ```
