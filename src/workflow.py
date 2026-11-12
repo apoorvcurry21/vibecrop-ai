@@ -10,10 +10,19 @@ from typing import Callable
 from src import config
 from src.cleanup import purge_job_temp
 from src.planning import pipeline as planning
-from src.planning.layouts import STYLES
+from src.planning.layouts import LAYOUTS, STYLES, assign_layouts
+from src.planning.prompt import INTRO_SAFE_S
+from src.rendering import framing as framing_mod
 from src.rendering import pipeline as rendering
 from src.sourcing import pipeline as sourcing
+from src.sourcing.youtube import _probe as probe_clip
 from src.transcription import pipeline as transcription
+
+MIN_SLOT_S = 1.5  # shortest slot the editor allows (the planner itself aims for 3-5 s)
+EDIT_GAP_S = 0.1  # smallest gap the editor allows between two slots
+# What travels with a clip when two slots swap places. Timing, layout and removed-state stay with the slot.
+SWAP_FIELDS = ("asset", "search_query", "alternative_queries", "spoken_text", "english_meaning", "reasoning",
+               "framing", "user_edited_query")
 
 SPOKEN_LANGUAGES = {
     "hi": "Hindi / Hinglish", "en": "English", "bn": "Bengali", "ta": "Tamil", "te": "Telugu", "mr": "Marathi",
@@ -164,6 +173,146 @@ def set_enabled(job_dir: Path, item_id: int, enabled: bool) -> None:
     plan = load_plan(job_dir)
     _item(plan, item_id)["enabled"] = enabled
     _save(job_dir, plan)
+
+
+def _clip_length(job_dir: Path, item: dict) -> float | None:
+    """How much footage the slot's downloaded clip has (None if unknown, e.g. already cleaned up)."""
+    asset = item.get("asset") or {}
+    if asset.get("status") != "ok":
+        return None
+    if asset.get("clip_duration"):
+        return float(asset["clip_duration"])
+    f = job_dir / asset.get("path", "")
+    if f.is_file():
+        got, ok = probe_clip(f)
+        return got if ok else None
+    return None
+
+
+def timing_limits(job_dir: Path, item_id: int) -> dict:
+    """The room a slot has on the timeline: earliest start, latest end and the longest allowed length.
+    Used by the editor's sliders and by `set_timing`."""
+    plan = load_plan(job_dir)
+    items = sorted(plan["items"], key=lambda i: i["timestamp_start"])
+    item = _item(plan, item_id)
+    pos = items.index(item)
+    lo = INTRO_SAFE_S if pos == 0 else max(INTRO_SAFE_S, items[pos - 1]["timestamp_end"] + EDIT_GAP_S)
+    duration = float(plan.get("video_duration") or 0.0)
+    hi = duration if pos == len(items) - 1 else min(duration, items[pos + 1]["timestamp_start"] - EDIT_GAP_S)
+    return {"min_start": round(lo, 2), "max_end": round(hi, 2), "max_len": _clip_length(job_dir, item)}
+
+
+def set_timing(job_dir: Path, item_id: int, start: float, end: float, refetch: bool = False) -> dict:
+    """Move/resize a slot on the timeline. It cannot cross or touch its neighbours, so slot order (and with it
+    the ids and clip file names) never changes. A slot cannot be longer than its downloaded clip unless
+    `refetch=True`, which downloads a fresh (possibly different) clip for the new length."""
+    start, end = round(float(start), 2), round(float(end), 2)
+    if end - start < MIN_SLOT_S - 1e-6:
+        raise WorkflowError(f"A slot must last at least {MIN_SLOT_S:g} seconds.")
+    lim = timing_limits(job_dir, item_id)
+    if start < lim["min_start"] - 1e-6:
+        raise WorkflowError(f"This slot cannot start before {lim['min_start']:g}s "
+                            "(the speaker owns the opening, and slots can't overlap).")
+    if end > lim["max_end"] + 1e-6:
+        raise WorkflowError(f"This slot cannot end after {lim['max_end']:g}s "
+                            "(the video ends there, or the next slot begins).")
+    if not refetch and lim["max_len"] is not None and end - start > lim["max_len"] + 0.05:
+        raise WorkflowError(f"The downloaded clip is only {lim['max_len']:.1f}s long. Shorten the slot, "
+                            "or fetch a longer clip (this may pick a different video).")
+    plan = load_plan(job_dir)
+    item = _item(plan, item_id)
+    item["timestamp_start"], item["timestamp_end"] = start, end
+    if refetch:
+        _resource(job_dir, item, set())
+    _save(job_dir, plan)
+    return item
+
+
+def _swap_clip_files(job_dir: Path, a: dict, b: dict) -> None:
+    """Keep the invariant 'item N owns clips/clip_NN.<ext>' when two items trade clips, so a later
+    'Regenerate' on one slot can never overwrite the other slot's file. Renames the files and rewrites the
+    path inside each asset record (the records themselves are exchanged by the caller)."""
+    moves = []  # (current file or None, new relative path, the asset record to update)
+    for owner, new_owner in ((a, b), (b, a)):
+        asset = owner.get("asset") or {}
+        if not asset.get("path"):
+            continue
+        old = job_dir / asset["path"]
+        moves.append((old if old.is_file() else None, f"clips/clip_{new_owner['id']:02d}{old.suffix}", asset))
+    parked = []
+    for old, new_rel, asset in moves:  # park first so same-named targets cannot collide
+        if old is not None:
+            tmp = old.with_name(old.name + ".swap")
+            old.rename(tmp)
+            parked.append((tmp, job_dir / new_rel))
+        asset["path"] = new_rel
+    for tmp, target in parked:
+        tmp.replace(target)
+
+
+def swap_slots(job_dir: Path, id_a: int, id_b: int) -> list[str]:
+    """Trade the clips (and what goes with them: query, spoken text, framing) between two slots.
+    Timing, layout and the removed/kept state stay with the slot. Returns warnings, e.g. a clip that is
+    now shorter than its new slot."""
+    if id_a == id_b:
+        raise WorkflowError("Pick two different slots to swap.")
+    plan = load_plan(job_dir)
+    a, b = _item(plan, id_a), _item(plan, id_b)
+    clips = {id_a: _clip_length(job_dir, a), id_b: _clip_length(job_dir, b)}  # measured before anything moves
+    _swap_clip_files(job_dir, a, b)
+    for field in SWAP_FIELDS:
+        va, vb = a.pop(field, None), b.pop(field, None)
+        if vb is not None:
+            a[field] = vb
+        if va is not None:
+            b[field] = va
+    _save(job_dir, plan)
+    warnings = []
+    for slot, clip_from in ((a, id_b), (b, id_a)):  # each slot now plays the other one's clip
+        length, have = slot["timestamp_end"] - slot["timestamp_start"], clips[clip_from]
+        if have is not None and length > have + 0.05:
+            warnings.append(f"Slot #{slot['id']} is {length:.1f}s but its new clip has only {have:.1f}s. "
+                            "Shorten the slot or fetch a longer clip.")
+    return warnings
+
+
+def set_framing(job_dir: Path, item_id: int, framing: dict) -> dict:
+    """Store zoom/pan keyframes (clamped) for a slot."""
+    plan = load_plan(job_dir)
+    item = _item(plan, item_id)
+    item["framing"] = framing_mod.normalize(framing)
+    _save(job_dir, plan)
+    return item
+
+
+def set_layout(job_dir: Path, item_id: int, layout: str) -> dict:
+    if layout not in LAYOUTS:
+        raise WorkflowError(f"Unknown layout '{layout}'.")
+    plan = load_plan(job_dir)
+    item = _item(plan, item_id)
+    item["layout"] = layout
+    _save(job_dir, plan)
+    return item
+
+
+def apply_style(job_dir: Path, style: str) -> None:
+    """Switch the video style and reset every slot's layout to it. Hybrid restores the AI's own picks."""
+    if style not in STYLES:
+        raise WorkflowError(f"Unknown video style '{style}'.")
+    write_job_meta(job_dir, style=style)
+    if not (job_dir / "plan.json").is_file():
+        return
+    plan = load_plan(job_dir)
+    items = sorted(plan["items"], key=lambda i: i["timestamp_start"])
+    for item, layout in zip(items, assign_layouts([i.get("ai_layout") for i in items], style)):
+        item["layout"] = layout
+    plan["style"] = style
+    _save(job_dir, plan)
+
+
+def set_split_face_y(job_dir: Path, value: float) -> None:
+    """Where the facecam half of a split slot is cropped from the speaker video (0 = top, 1 = bottom)."""
+    write_job_meta(job_dir, split_face_y=round(min(max(float(value), 0.0), 1.0), 2))
 
 
 def render_final(job_dir: Path, caption_mode: str | None, auto_clean: bool = True,

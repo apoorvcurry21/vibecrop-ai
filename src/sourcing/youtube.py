@@ -10,7 +10,7 @@ MAX_SOURCE_S = 1200.0  # skip very long videos (streams, full matches): slow and
 SEARCH_N = 10
 MAX_DOWNLOAD_TRIES = 3
 WINDOW_FRACTION = 0.25  # start ~25% in: past intros/logos, usually in real footage
-PAD_S = 1.0  # download slightly more than the slot so trimming never runs short
+PAD_S = 4.0  # extra footage beyond the slot: the editor can lengthen a slot a little without re-downloading
 # Video-only (so the clip is silent by construction), up to 1080p, H.264 preferred.
 VIDEO_FORMAT = (
     "bestvideo[height<=1080][vcodec^=avc1]/bestvideo[height<=1080][ext=mp4]/"
@@ -136,7 +136,7 @@ def source_video_clip(queries: list[str], slot_seconds: float, out_stem: Path,
                 "status": "ok", "source": "youtube", "query_used": query,
                 "video_id": cand["id"], "url": cand["url"], "title": cand["title"],
                 "channel": cand["channel"], "source_duration": cand["duration"],
-                "window_start": start, "window_end": end, "path": path.name,
+                "window_start": start, "window_end": end, "path": path.name, "clip_duration": round(got, 2),
                 "tried_ids": sorted(seen),  # so "Regenerate" can ask for a different video
             }
     raise SourcingError(f"No clip found. Last error: {last_error}")

@@ -6,12 +6,12 @@ import pytest
 
 import src.sourcing.youtube as yt
 from src.sourcing import pipeline
-from src.sourcing.youtube import SourcingError, pick_window, source_video_clip
+from src.sourcing.youtube import PAD_S, SourcingError, pick_window, source_video_clip
 
 
 def test_pick_window_starts_about_25_percent_in():
     start, end = pick_window(200.0, 4.0)
-    assert start == 50.0 and end == pytest.approx(55.0)  # 4 s slot + 1 s padding
+    assert start == 50.0 and end == pytest.approx(50.0 + 4.0 + PAD_S)  # slot + headroom for lengthening it
 
 
 def test_pick_window_clamps_inside_short_videos():
