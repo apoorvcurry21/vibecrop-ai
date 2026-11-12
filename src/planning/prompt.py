@@ -32,14 +32,26 @@ _VIDEO_ONLY_RULE_1 = (
 )
 
 
-def get_system_prompt(images: bool) -> str:
-    """Full prompt when images are enabled; otherwise rule 1 is swapped for the video-only version."""
+HYBRID_RULE = (
+    '9. LAYOUT. Give every item a "layout". "overlay" = the B-roll fills the whole screen (best for short, punchy, '
+    'high-impact or emotional visuals and fast action). "split" = the B-roll takes the top half while the speaker '
+    "stays visible in the bottom half (best for longer, explanatory or supporting visuals, or when seeing the "
+    "speaker's reaction matters). Use a real mix of both across the video, and never more than 3 items in a row "
+    "with the same layout."
+)
+
+
+def get_system_prompt(images: bool, hybrid: bool = False) -> str:
+    """Full prompt when images are enabled; otherwise rule 1 is swapped for the video-only version.
+    `hybrid` appends rule 9 (per-item layout); the other styles do not ask Gemini about layout."""
     if images:
-        return SYSTEM_PROMPT
-    lines = SYSTEM_PROMPT.split("\n")
-    idx = next(i for i, line in enumerate(lines) if line.startswith("1. COUNT AND MIX"))
-    lines[idx] = _VIDEO_ONLY_RULE_1
-    return "\n".join(lines)
+        prompt = SYSTEM_PROMPT
+    else:
+        lines = SYSTEM_PROMPT.split("\n")
+        idx = next(i for i, line in enumerate(lines) if line.startswith("1. COUNT AND MIX"))
+        lines[idx] = _VIDEO_ONLY_RULE_1
+        prompt = "\n".join(lines)
+    return prompt + "\n" + HYBRID_RULE if hybrid else prompt
 
 
 def max_gap_for(total: int, duration: float) -> float:

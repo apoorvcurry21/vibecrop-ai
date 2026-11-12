@@ -208,3 +208,38 @@ def test_feasible_max_reflects_how_many_clips_physically_fit():
     assert feasible_max(30.0) == 8       # 1 s intro + 8 x 3 s clips + 7 x 0.5 s gaps = 28.5 s
     assert feasible_max(60.0) == 17      # more than the 15 cap, so the cap is what limits a 60 s reel
     assert feasible_max(2.0) == 1        # never below 1
+
+
+# ----------------------------------------------------------------------------- video styles / layouts
+def test_assign_layouts_for_each_style():
+    from src.planning.layouts import assign_layouts
+    mixed = ["overlay", "split", "split", "overlay"]
+    assert assign_layouts(mixed, "overlay") == ["overlay"] * 4
+    assert assign_layouts(mixed, "split") == ["split"] * 4
+    assert assign_layouts(mixed, "hybrid") == mixed  # a sensible AI mix is kept as-is
+
+
+def test_hybrid_breaks_long_runs_and_replaces_a_useless_all_same_answer():
+    from src.planning.layouts import assign_layouts
+    out = assign_layouts(["split"] * 6, "hybrid")  # AI said the same thing six times: fall back to alternating
+    assert out == ["overlay", "split"] * 3
+    out = assign_layouts(["overlay", "overlay", "overlay", "overlay", "split"], "hybrid")
+    assert out[:3] == ["overlay"] * 3 and out[3] == "split"  # the 4th in a row is flipped
+    assert assign_layouts([None, None, None], "hybrid") == ["overlay", "split", "overlay"]  # no answer at all
+
+
+def test_only_the_hybrid_prompt_asks_gemini_for_layout():
+    from src.planning.prompt import get_system_prompt
+    assert "9. LAYOUT" in get_system_prompt(True, hybrid=True) and "9. LAYOUT" in get_system_prompt(False, hybrid=True)
+    assert "LAYOUT" not in get_system_prompt(True) and "LAYOUT" not in get_system_prompt(False)
+
+
+def test_plan_sets_layouts_from_the_style():
+    mixed = [item("video", 5 + i * 9, 9 + i * 9, layout="split" if i % 2 else "overlay") for i in range(10)]
+    out = plan(TRANSCRIPT, total=10, client=FakeClient(reply(mixed)), style="hybrid")
+    assert [i["layout"] for i in out["items"]] == ["overlay", "split"] * 5
+    assert out["style"] == "hybrid" and out["items"][1]["ai_layout"] == "split"
+    out = plan(TRANSCRIPT, total=10, client=FakeClient(reply(mixed)), style="split")
+    assert {i["layout"] for i in out["items"]} == {"split"} and "ai_layout" not in out["items"][0]
+    out = plan(TRANSCRIPT, total=10, client=FakeClient(reply(mixed)))  # default style = the original look
+    assert {i["layout"] for i in out["items"]} == {"overlay"}

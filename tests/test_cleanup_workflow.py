@@ -127,7 +127,7 @@ def test_job_remembers_count_and_notes_and_pipeline_uses_them(tmp_path, monkeypa
     seen = {}
     monkeypatch.setattr(workflow.transcription, "run",
                         lambda video, lang, job_dir=None: (job_dir / "transcript.json").write_text("{}"))
-    monkeypatch.setattr(workflow.planning, "run", lambda j, total=None, notes="": seen.update(total=total, notes=notes)
+    monkeypatch.setattr(workflow.planning, "run", lambda j, total=None, notes="", style="overlay": seen.update(total=total, notes=notes)
                         or (j / "plan.json").write_text(json.dumps({"items": []})))
     monkeypatch.setattr(workflow.sourcing, "run", lambda j, log=print: None)
     workflow.run_pipeline(job, log=lambda m: None)

@@ -14,14 +14,14 @@ from src.planning.gemini_planner import PlanningError, plan
 
 
 def run(transcript_path: str | Path, total: int | None = None, model: str | None = None,
-        client: Any = None, notes: str = "") -> Path:
+        client: Any = None, notes: str = "", style: str = "overlay") -> Path:
     transcript_path = Path(transcript_path)
     if transcript_path.is_dir():
         transcript_path = transcript_path / "transcript.json"
     if not transcript_path.is_file():
         raise PlanningError(f"Transcript not found: {transcript_path}")
     transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-    result = plan(transcript, total=total, model=model, client=client, notes=notes)
+    result = plan(transcript, total=total, model=model, client=client, notes=notes, style=style)
     result["source_transcript"] = transcript_path.name
     out = transcript_path.parent / "plan.json"
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -33,10 +33,12 @@ def main() -> None:
     parser.add_argument("job", help="Job folder or transcript.json from Phase 1")
     parser.add_argument("--total", type=int, default=None, help="Number of B-rolls, 1-15 (default 10)")
     parser.add_argument("--model", default=None, help="Override the Gemini model")
+    parser.add_argument("--style", choices=("overlay", "split", "hybrid"), default="overlay",
+                        help="Video style: overlay, split (b-roll over facecam) or hybrid (AI mixes both)")
     parser.add_argument("--notes", default="", help="Optional hints for the AI: names, topics, things to show")
     args = parser.parse_args()
     try:
-        out = run(args.job, total=args.total, model=args.model, notes=args.notes)
+        out = run(args.job, total=args.total, model=args.model, notes=args.notes, style=args.style)
     except (config.ConfigError, PlanningError) as exc:
         raise SystemExit(f"Error: {exc}")
     data = json.loads(out.read_text(encoding="utf-8"))

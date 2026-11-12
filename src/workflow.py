@@ -10,6 +10,7 @@ from typing import Callable
 from src import config
 from src.cleanup import purge_job_temp
 from src.planning import pipeline as planning
+from src.planning.layouts import STYLES
 from src.rendering import pipeline as rendering
 from src.sourcing import pipeline as sourcing
 from src.transcription import pipeline as transcription
@@ -55,10 +56,14 @@ def source_video_path(job_dir: Path) -> Path | None:
 
 
 def create_job(video_path: str | Path, language: str, copy_into_job: bool = False,
-               root: Path | None = None, total: int | None = None, notes: str = "") -> Path:
+               root: Path | None = None, total: int | None = None, notes: str = "",
+               style: str = "overlay") -> Path:
     """Create a job folder for a video. `copy_into_job=True` is for uploads (the copy is purged on cleanup).
 
-    `total` (1-15) is how many B-rolls to plan; `notes` are optional creator hints for the AI."""
+    `total` (1-15) is how many B-rolls to plan; `notes` are optional creator hints for the AI;
+    `style` is the video style: "overlay", "split" or "hybrid" (see planning/layouts.py)."""
+    if style not in STYLES:
+        raise WorkflowError(f"Unknown video style '{style}'. Choose one of: {', '.join(STYLES)}.")
     video_path = Path(video_path)
     if not video_path.is_file():
         raise WorkflowError(f"Video not found: {video_path}")
@@ -69,7 +74,7 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
         shutil.copyfile(video_path, source)
     write_job_meta(job, source_video=str(source), language=language, source_name=video_path.name,
                    total_brolls=config.clamp_brolls(config.total_brolls() if total is None else total),
-                   notes=" ".join((notes or "").split()))
+                   notes=" ".join((notes or "").split()), style=style)
     return job
 
 
@@ -104,7 +109,8 @@ def run_pipeline(job_dir: Path, log: Callable[[str], None] = print, total: int |
         transcription.run(video, meta["language"], job_dir=job_dir)
     if not (job_dir / "plan.json").is_file():
         log("Planning B-rolls with Gemini...")
-        planning.run(job_dir, total=total or meta.get("total_brolls"), notes=meta.get("notes", ""))
+        planning.run(job_dir, total=total or meta.get("total_brolls"), notes=meta.get("notes", ""),
+                     style=meta.get("style", "overlay"))
     log("Downloading B-roll clips...")
     sourcing.run(job_dir, log=log)
 

@@ -15,6 +15,7 @@ class BRollItem(BaseModel):
     spoken_text: str  # words from the transcript this B-roll covers
     english_meaning: str  # short English meaning of what is being said
     reasoning: str  # why this visual fits the meaning (one sentence)
+    layout: Literal["overlay", "split"] = "overlay"  # only asked for in the hybrid style (see planning/layouts.py)
 
 
 class PlanResponse(BaseModel):

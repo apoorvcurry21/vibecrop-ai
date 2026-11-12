@@ -13,7 +13,7 @@ from src import config
 from src.captions.chunks import chunk_words
 from src.captions.rewrite import MODES, CaptionError, rewrite_chunks
 from src.rendering.ass import caption_events, credit_event, write_ass
-from src.rendering.compose import Overlay, RenderError, render
+from src.rendering.compose import DEFAULT_FACE_Y, LAYOUTS, Overlay, RenderError, render
 
 
 def load_caption_chunks(job_dir: Path, mode: str, transcript: dict, topic: str = "",
@@ -35,8 +35,13 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
         raise RenderError(f"Main video not found: {main_video}")
     plan = json.loads((job_dir / "plan.json").read_text(encoding="utf-8"))
 
+    job_meta_file = job_dir / "job.json"
+    job_meta = json.loads(job_meta_file.read_text(encoding="utf-8")) if job_meta_file.is_file() else {}
+    face_y = float(job_meta.get("split_face_y", DEFAULT_FACE_Y))
+
     overlays: list[Overlay] = []
     events: list[str] = []
+    split_spans: list[tuple[float, float]] = []
     for item in sorted(plan["items"], key=lambda i: i["timestamp_start"]):
         asset = item.get("asset") or {}
         clip = job_dir / asset.get("path", "")
@@ -47,9 +52,12 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
             log(f"[{item['id']:>2}] no clip, speaker stays on screen for this slot")
             continue
         start, end = item["timestamp_start"], item["timestamp_end"]
-        overlays.append(Overlay(clip, start, end))
+        layout = item.get("layout") if item.get("layout") in LAYOUTS else "overlay"
+        overlays.append(Overlay(clip, start, end, layout=layout, framing=item.get("framing")))
+        if layout == "split":
+            split_spans.append((start, end))
         if credits and asset.get("channel"):
-            events.append(credit_event(start, end, asset["channel"]))
+            events.append(credit_event(start, end, asset["channel"], split=layout == "split"))
 
     if caption_mode:
         if caption_mode not in MODES:
@@ -63,7 +71,7 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
         except CaptionError as exc:
             log(f"Caption rewrite failed ({exc}); using the original captions instead.")
             chunks = load_caption_chunks(job_dir, "original", transcript)
-        events += caption_events(chunks)
+        events += caption_events(chunks, split_spans)
 
     ass_name = None
     if events:
@@ -71,7 +79,7 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
         ass_name = "overlays.ass"  # relative: FFmpeg runs with cwd=job_dir
 
     log(f"Rendering {len(overlays)} B-roll overlays" + (f" + {caption_mode} captions..." if caption_mode else "..."))
-    return render(main_video, overlays, job_dir / "final.mp4", subtitles_file=ass_name, cwd=job_dir)
+    return render(main_video, overlays, job_dir / "final.mp4", subtitles_file=ass_name, cwd=job_dir, face_y=face_y)
 
 
 def main() -> None:
