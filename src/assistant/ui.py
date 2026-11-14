@@ -8,7 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from src.assistant import agent, assets, snapshots, store, style
+from src.assistant import agent, assets, media_tools, snapshots, store, style
 from src.assistant.tools import Attachment
 
 VISIBLE_MESSAGES = 50  # older ones stay in chat.json but are not drawn
@@ -37,6 +37,8 @@ def _render_cards(job: Path, cards: list[dict], key: str = "live") -> None:
     for ci, card in enumerate(cards or []):
         if card.get("type") == "image" and (job / card.get("path", "x")).is_file():
             st.image(str(job / card["path"]), caption=card.get("caption"), width=220)
+        elif card.get("type") == "layouts":
+            _render_layouts(card, key, ci)
         elif card.get("type") == "choices":
             items = [i for i in card.get("items", []) if (job / i.get("path", "x")).is_file()]
             for row in range(0, len(items), 3):
@@ -45,6 +47,19 @@ def _render_cards(job: Path, cards: list[dict], key: str = "live") -> None:
                         st.image(str(job / item["path"]), caption=item.get("caption"), width="stretch")
                         col.button("Use this", key=f"use_{key}_{ci}_{item['id']}", on_click=_suggest,
                                    args=(f"Use {item['id']}",), width="stretch")
+
+
+def _render_layouts(card: dict, key: str, ci: int) -> None:
+    """Illustrated examples of the layouts; tapping one sends 'Use the ... layout' as the user's next message."""
+    for col, (lid, name, blurb, say) in zip(st.columns(3), media_tools.LAYOUT_CHOICES):
+        with col:
+            st.image(str(assets.STATIC_DIR / f"layout_{lid}.png"), width="stretch")
+            st.markdown(f"**{name}**")
+            st.caption(blurb)
+            st.button("Use this", key=f"lay_{key}_{ci}_{lid}", on_click=_suggest, args=(say,), width="stretch")
+    if card.get("text_example"):
+        st.image(str(assets.STATIC_DIR / "layout_text.png"),
+                 caption="Text on top of the video (tell me the words, where and what colour)", width=150)
 
 
 def _render_message(job: Path, m: dict, key: str = "live") -> None:

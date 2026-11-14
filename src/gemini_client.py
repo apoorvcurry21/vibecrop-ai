@@ -13,13 +13,13 @@ class GeminiError(RuntimeError):
     pass
 
 
-def make_client() -> Any:
+def make_client(timeout_ms: int = GEMINI_TIMEOUT_MS) -> Any:
     from google import genai
     from google.genai import types
 
     return genai.Client(
         api_key=get_secret("GEMINI_API_KEY"),
-        http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),  # never hang silently
+        http_options=types.HttpOptions(timeout=timeout_ms),  # never hang silently
     )
 
 

@@ -320,7 +320,7 @@ def test_a_model_without_thinking_levels_is_retried_without_them(tmp_path):
 def test_missing_api_key_is_reported_as_an_error_event(tmp_path, monkeypatch):
     job = make_job(tmp_path)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.setattr(agent, "make_client", lambda: (_ for _ in ()).throw(config.ConfigError("GEMINI_API_KEY is not set.")))
+    monkeypatch.setattr(agent, "make_client", lambda *a, **k: (_ for _ in ()).throw(config.ConfigError("GEMINI_API_KEY is not set.")))
     ev = list(agent.stream_turn(job, [], "hi"))
     assert kinds(ev) == ["error", "done"] and "GEMINI_API_KEY" in ev[0]["text"]
 
@@ -426,3 +426,48 @@ def test_chat_model_chain_prefers_the_fast_model_and_never_repeats(monkeypatch):
     assert config.chat_model_chain() == ["gemini-3.1-flash-lite", "big", "small"]
     monkeypatch.setenv("GEMINI_CHAT_MODEL", "big")
     assert config.chat_model_chain() == ["big", "small"]
+
+
+# ----------------------------------------------------------------------------- slow / broken API must never hang or crash the panel
+def test_a_timeout_skips_straight_to_the_next_model_without_retrying_the_slow_one(tmp_path):
+    import httpx
+
+    job = make_job(tmp_path)
+    client = FakeClient(httpx.ReadTimeout("slow"), [chunk(text("from the backup"))])
+    ev = run_agent(job, client, models=("slow", "backup"))
+    assert [c["model"] for c in client.models.calls] == ["slow", "backup"]  # one try on the slow model, not three
+    assert ev[-1]["text"] == "from the backup"
+
+
+def test_every_model_timing_out_gives_a_friendly_error_not_a_crash(tmp_path):
+    import httpx
+
+    job = make_job(tmp_path)
+    ev = run_agent(job, FakeClient(httpx.ReadTimeout("x"), httpx.ConnectError("y")), models=("a", "b"))
+    assert kinds(ev) == ["error", "done"] and "couldn't reach the AI" in ev[0]["text"]
+
+
+def test_a_timeout_in_the_middle_of_the_answer_is_reported(tmp_path):
+    import httpx
+
+    def stream():
+        yield chunk(text("Partial "))
+        raise httpx.ReadTimeout("stalled")
+
+    ev = run_agent(make_job(tmp_path), FakeClient(stream()))
+    assert kinds(ev) == ["text", "error", "done"] and ev[-1]["text"] == "Partial "
+
+
+def test_an_unexpected_bug_inside_a_turn_becomes_an_error_event(tmp_path, monkeypatch):
+    job = make_job(tmp_path)
+    monkeypatch.setattr(tools, "run_tool", lambda *a, **k: (_ for _ in ()).throw(KeyError("boom")))
+    ev = run_agent(job, FakeClient([chunk(call("get_plan"))]))
+    assert kinds(ev)[-2:] == ["error", "done"] and "Something went wrong (KeyError)" in ev[-2]["text"]
+
+
+def test_the_chat_uses_a_short_timeout_but_the_planner_keeps_the_long_one(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(agent, "make_client", lambda timeout_ms=None: seen.setdefault("t", timeout_ms) and
+                        SimpleNamespace(models=FakeModels([[chunk(text("hi"))]])))
+    list(agent.stream_turn(make_job(tmp_path), [], "hi", models=["m"]))
+    assert seen["t"] == config.CHAT_TIMEOUT_MS == 30_000 < config.GEMINI_TIMEOUT_MS

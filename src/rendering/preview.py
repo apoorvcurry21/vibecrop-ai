@@ -108,3 +108,16 @@ def render_clip_preview(clip: Path, main_video: Path | None, start: float, end: 
         raise PreviewError(str(exc)) from exc
     finally:
         seg.unlink(missing_ok=True)
+
+
+def slot_still_png(clip: Path, main_video: Path | None, start: float, end: float, layout: str, framing: dict | None,
+                   face_y: float, work_dir: Path, pip: dict | None = None) -> bytes:
+    """One still of the slot exactly as exported (speaker + B-roll, ~40% into the slot). It renders the slot with the
+    same code as the final video, then grabs a frame, so it takes a second or two."""
+    tmp = work_dir / "_still_preview.mp4"
+    try:
+        render_clip_preview(clip, main_video, start, end, layout, framing, face_y, tmp, pip=pip)
+        return _ffmpeg_png(["-ss", f"{max(end - start, 0.1) * 0.4:.2f}", "-i", str(tmp), "-vf",
+                            f"scale={PREVIEW_W}:-2"])
+    finally:
+        tmp.unlink(missing_ok=True)

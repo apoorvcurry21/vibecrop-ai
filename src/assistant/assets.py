@@ -11,6 +11,7 @@ from pathlib import Path
 from src.assistant.tools import Attachment
 
 ASSETS = "assets"
+STATIC_DIR = Path(__file__).parent / "static"  # the layout mockup images
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".m4v", ".webm"}
 MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024  # a short clip; far above any picture

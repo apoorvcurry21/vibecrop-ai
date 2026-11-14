@@ -51,7 +51,9 @@ Pictures and clips:
 - "Put this where I say X": find_in_transcript for X, then place the media starting about 0.3 s before that word, for roughly 3 seconds (or as long as the user asked). "Wherever it fits": read get_transcript and choose a moment that matches what the picture or clip shows.
 - A YouTube link: place_youtube_clip with the user's time as from_time if they gave one, otherwise describe the moment in `about`. Default clip length 5 seconds unless the user says otherwise.
 - "Find / get me a picture of ...": search_web_images, then place the best match if they said where, else let them choose. "Make / generate a picture": generate_image (it may fail for real people or on this account: then offer search_web_images). Web pictures get a small credit line in the video automatically.
-- Unless the user says how it should look, a new picture or clip fills the screen (layout overlay). If they ask for a small box use layout pip with a position; split puts it on the top half.
+- If the user asks you to add a NEW picture or clip and has not said how it should look, and you have not asked yet in this chat, call ask_layout, end your reply with one short question and wait for their tap. Do not ask when they already said (full screen / split / small box / corner...), when replacing the clip of an existing slot, or after they have chosen once (reuse that choice unless they change it).
+- Layouts: full screen = overlay, a small box = pip with a position (top-right by default), split = top half.
+- After placing something the user cares about seeing, you may call preview_slot.
 
 Current project (may be stale after your own edits; call get_plan for a fresh copy):
 """
@@ -114,6 +116,7 @@ def open_stream(client: Any, models: list[str], contents: list, config_: Any,
                 sleep: Callable[[float], None]) -> Iterator[Any]:
     """Stream one model response, retrying transient API errors and falling back to the next model. Errors that
     happen before the first chunk are retried; after that they surface as GeminiError."""
+    import httpx
     from google.genai import errors
 
     last: Exception | None = None
@@ -123,6 +126,9 @@ def open_stream(client: Any, models: list[str], contents: list, config_: Any,
             try:
                 it = iter(client.models.generate_content_stream(model=model, contents=contents, config=cfg))
                 first = next(it, None)
+            except httpx.HTTPError as exc:  # a timeout or a dropped connection: don't wait again, try the next model
+                last = exc
+                break
             except errors.APIError as exc:
                 last = exc
                 code = getattr(exc, "code", None)
@@ -137,10 +143,18 @@ def open_stream(client: Any, models: list[str], contents: list, config_: Any,
                 if first is not None:
                     yield first
                 yield from it
-            except errors.APIError as exc:
+            except (errors.APIError, httpx.HTTPError) as exc:
                 raise GeminiError(f"Gemini request failed: {exc}") from exc
             return
-    raise GeminiError(f"Gemini request failed: {last}")
+    raise GeminiError(f"Gemini request failed: {_describe(last)}")
+
+
+def _describe(exc: Exception | None) -> str:
+    import httpx
+
+    if isinstance(exc, httpx.TimeoutException):
+        return "the AI took too long to answer"
+    return str(exc) if exc else "unknown error"
 
 
 def stream_turn(job: Path, history: list[dict], user_text: str, attachments: list[Attachment] | None = None,
@@ -150,7 +164,7 @@ def stream_turn(job: Path, history: list[dict], user_text: str, attachments: lis
     attachments = attachments or []
     ctx = ToolContext(job=job, attachments={a.id: a for a in attachments}, log=log)
     try:
-        client = client or make_client()
+        client = client or make_client(config.CHAT_TIMEOUT_MS)
         models = models or config.chat_model_chain()
         contents = history_contents(history) + [user_content(user_text, attachments)]
         cfg = build_config(system_prompt(job, attachments))
@@ -196,6 +210,11 @@ def stream_turn(job: Path, history: list[dict], user_text: str, attachments: lis
             contents.append(types.Content(role="user", parts=responses))
     except GeminiError as exc:
         yield {"type": "error", "text": f"I couldn't reach the AI just now. {exc}"}
+        yield {"type": "done", "text": "".join(reply), "changed": ctx.changed, "cards": cards}
+        return
+    except Exception as exc:  # noqa: BLE001 - whatever goes wrong, the chat panel must keep working
+        yield {"type": "error", "text": f"Something went wrong ({type(exc).__name__}). Your project is unchanged "
+                                        "by this step; try again or rephrase."}
         yield {"type": "done", "text": "".join(reply), "changed": ctx.changed, "cards": cards}
         return
 

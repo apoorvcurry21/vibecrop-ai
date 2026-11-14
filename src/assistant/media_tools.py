@@ -1,5 +1,5 @@
 """Chat tools that bring in pictures and clips: web image search, AI image generation, the user's attached pictures
-and videos, and pasted YouTube links. They are registered in tools.REGISTRY when this module is imported (tools.py
+and videos, and pasted YouTube links, plus two that show things in the chat (the layout picker, slot previews). They are registered in tools.REGISTRY when this module is imported (tools.py
 does that at its end)."""
 from __future__ import annotations
 
@@ -205,3 +205,52 @@ def _place_youtube_clip(ctx: ToolContext, args: dict) -> dict:
     result["from_video"] = {"title": info["title"], "channel": info["channel"], "starts_at": src_start,
                             "why": reason or "the time you gave"}
     return result
+
+
+# ----------------------------------------------------------------------------- things shown in the chat
+# (layout id, short name, the line shown under its example picture, what the user "says" when they tap it)
+LAYOUT_CHOICES = (
+    ("overlay", "Full screen", "Covers the whole video while you keep talking", "Use the full-screen layout"),
+    ("split", "Split", "Picture on top, you below", "Use the split layout"),
+    ("pip", "Small box", "A small picture floating over you", "Use the small box (picture-in-picture) layout"),
+)
+
+
+@tool("ask_layout", "Show the user illustrated examples of the 3 layouts (full screen, split, small box) so they can "
+      "tap one. Use it when you are about to add a NEW picture or clip and the user has not said how it should "
+      "look. Then stop and wait for their choice; do not place anything yet. Ask at most once per conversation.",
+      {"include_text_example": _p("boolean", "also show an example of text on top of the video")},
+      label=lambda a: "Showing layout options")
+def _ask_layout(ctx: ToolContext, args: dict) -> dict:
+    ctx.cards.append({"type": "layouts", "text_example": bool(args.get("include_text_example"))})
+    return {"shown": True, "note": "The user sees the options and will tap one. End your reply now with one short "
+                                   "question; place the media after they answer."}
+
+
+@tool("preview_slot", "Show the user a still of how a slot looks in the final video (speaker plus the clip). Use it "
+      "after placing something when the user wants to see it. Takes a second or two.",
+      {"slot_id": _p("integer", "slot id")}, required=("slot_id",), label=lambda a: "Making a preview")
+def _preview_slot(ctx: ToolContext, args: dict) -> dict:
+    from src.rendering import preview
+    from src.rendering.compose import DEFAULT_FACE_Y
+
+    sid = _int(args, "slot_id")
+    plan = workflow.load_plan(ctx.job)
+    item = next((i for i in plan["items"] if i["id"] == sid), None)
+    if item is None:
+        raise ToolError(f"No B-roll with id {sid}.")
+    clip = ctx.job / (item.get("asset") or {}).get("path", "x")
+    if not clip.is_file():
+        raise ToolError("That slot has no clip to preview.")
+    face_y = float(workflow.read_job_meta(ctx.job).get("split_face_y", DEFAULT_FACE_Y))
+    try:
+        png = preview.slot_still_png(
+            clip, workflow.source_video_path(ctx.job), item["timestamp_start"], item["timestamp_end"],
+            item.get("layout", "overlay"), item.get("framing"), face_y, assets.assets_dir(ctx.job),
+            pip=item.get("pip"))
+    except Exception as exc:  # noqa: BLE001 - ffmpeg trouble should not crash the chat
+        raise ToolError(f"Could not make the preview: {str(exc)[:160]}") from None
+    dest = assets.assets_dir(ctx.job) / f"preview_{sid}.png"
+    dest.write_bytes(png)
+    ctx.cards.append({"type": "image", "path": f"{assets.ASSETS}/{dest.name}", "caption": f"Slot {sid} in the video"})
+    return {"ok": True, "note": "The preview is shown in the chat."}
