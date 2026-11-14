@@ -23,7 +23,17 @@ DEFAULT_FACE_Y = 0.4  # where in the vertical speaker video the facecam half is 
 # Fill the 9:16 frame by scaling up (aspect preserved, no stretching), then crop the centre.
 FILL_CROP = fill_crop(OUT_W, OUT_H)
 
-LAYOUTS = ("overlay", "split")
+LAYOUTS = ("overlay", "split", "pip")
+
+# Picture-in-picture: a small framed clip over the speaker. `pip = {"pos": ..., "scale": ...}` where scale is the
+# box width as a fraction of the frame width. Edges keep clear of the app UI at the top and of the captions at the
+# bottom (captions sit around y = 1400-1520).
+PIP_ASPECT = 4 / 3  # box width / height
+PIP_BORDER = 6
+PIP_MARGIN_X, PIP_MARGIN_TOP, PIP_MARGIN_BOTTOM = 50, 190, 440
+PIP_POSITIONS = ("top-left", "top", "top-right", "center", "bottom-left", "bottom", "bottom-right")
+PIP_DEFAULT = {"pos": "top-right", "scale": 0.6}
+PIP_MIN_SCALE, PIP_MAX_SCALE = 0.3, 0.95
 
 
 class RenderError(RuntimeError):
@@ -39,6 +49,29 @@ class Overlay:
     framing: dict | None = None  # zoom/pan keyframes (see framing.py); None = plain centre fill
     src_w: int = 0  # clip size; probed by render() when zoom/pan needs it
     src_h: int = 0
+    pip: dict | None = None  # picture-in-picture position/size (layout "pip" only)
+
+
+def normalize_pip(pip: dict | None) -> dict:
+    """Clamp and complete a pip dict; anything unknown falls back to the default."""
+    pip = pip or {}
+    pos = pip.get("pos") if pip.get("pos") in PIP_POSITIONS else PIP_DEFAULT["pos"]
+    try:
+        scale = float(pip.get("scale", PIP_DEFAULT["scale"]))
+    except (TypeError, ValueError):
+        scale = PIP_DEFAULT["scale"]
+    return {"pos": pos, "scale": round(min(max(scale, PIP_MIN_SCALE), PIP_MAX_SCALE), 2)}
+
+
+def pip_geometry(pip: dict | None) -> tuple[int, int, int, int]:
+    """(width, height, x, y) of the picture-in-picture box in the 1080x1920 frame."""
+    p = normalize_pip(pip)
+    w = round(OUT_W * p["scale"] / 2) * 2
+    h = round(w / PIP_ASPECT / 2) * 2
+    vert, _, horiz = p["pos"].partition("-")  # "top-left" -> ("top", "left"); "top" -> ("top", "")
+    x ={"left": PIP_MARGIN_X, "right": OUT_W - w - PIP_MARGIN_X}.get(horiz, (OUT_W - w) // 2)
+    y = {"top": PIP_MARGIN_TOP, "bottom": OUT_H - h - PIP_MARGIN_BOTTOM}.get(vert, (OUT_H - h) // 2)
+    return w, h, max(0, min(x, OUT_W - w)), max(0, min(y, OUT_H - h))
 
 
 def probe_size(path: Path) -> tuple[int, int]:
@@ -52,8 +85,10 @@ def probe_size(path: Path) -> tuple[int, int]:
         raise RenderError(f"Could not read the size of clip {path.name}.") from exc
 
 
-def box_for(layout: str) -> tuple[int, int]:
+def box_for(layout: str, pip: dict | None = None) -> tuple[int, int]:
     """Size of the area a clip is framed into."""
+    if layout == "pip":
+        return pip_geometry(pip)[:2]
     return (OUT_W, SPLIT_Y) if layout == "split" else (OUT_W, OUT_H)
 
 
@@ -72,11 +107,18 @@ def build_filtergraph(overlays: list[Overlay], subtitles_file: str | None = None
     face_top = round((OUT_H - SPLIT_H) * min(max(face_y, 0.0), 1.0))
     k = 0
     for n, ov in enumerate(overlays, 1):
-        w, h = box_for(ov.layout)
+        w, h = box_for(ov.layout, ov.pip)
         dur = ov.end - ov.start
         # Clip timestamps are shifted to start at the slot's start, so frames line up with the speaker.
         chain = clip_filter(ov.framing, dur, w, h, ov.src_w, ov.src_h, FPS)
         gate = f"enable='between(t,{ov.start:.3f},{ov.end:.3f})'"
+        if ov.layout == "pip":
+            _, _, px, py = pip_geometry(ov.pip)
+            parts.append(f"[{n}:v]{chain},format=yuv420p,tpad=stop_mode=clone:stop_duration={dur:.3f},"
+                         f"drawbox=x=0:y=0:w=iw:h=ih:color={BORDER_COLOR}:t={PIP_BORDER},"
+                         f"setpts=PTS+{ov.start:.3f}/TB[c{n}]")
+            parts.append(f"[b{n - 1}][c{n}]overlay={px}:{py}:{gate}:eof_action=pass[b{n}]")
+            continue
         if ov.layout != "split":
             parts.append(f"[{n}:v]{chain},format=yuv420p,setpts=PTS+{ov.start:.3f}/TB[c{n}]")
             parts.append(f"[b{n - 1}][c{n}]overlay={gate}:eof_action=pass[b{n}]")

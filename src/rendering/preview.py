@@ -31,10 +31,10 @@ def _ffmpeg_png(args: list[str]) -> bytes:
 
 
 def frame_png(clip: Path, framing: dict | None, layout: str, duration: float, at: str,
-              clip_len: float | None = None) -> bytes:
-    """One still of the framed B-roll box (the whole 9:16 frame for overlay, the top half for split):
-    `at` = "start" or "end" keyframe, i.e. the first or the last frame of the slot."""
-    w, h = box_for(layout)
+              clip_len: float | None = None, pip: dict | None = None) -> bytes:
+    """One still of the framed B-roll box (the whole 9:16 frame for overlay, the top half for split, the small
+    box for pip): `at` = "start" or "end" keyframe, i.e. the first or the last frame of the slot."""
+    w, h = box_for(layout, pip)
     sw, sh = probe_size(clip)
     chain = fr.clip_filter(framing, duration, w, h, sw, sh, FPS)
     last = max(0, int(min(duration, clip_len or duration) * FPS) - 1)
@@ -54,7 +54,8 @@ def _dashed_rect(draw, box, color, width=3, dash=10):
                       fill=color, width=width)
 
 
-def source_view_png(clip: Path, framing: dict | None, layout: str, width: int = 640) -> bytes:
+def source_view_png(clip: Path, framing: dict | None, layout: str, width: int = 640,
+                    pip: dict | None = None) -> bytes:
     """The WHOLE source clip (e.g. 16:9) with the part that ends up in the reel outlined: a solid box for the
     start keyframe and a dashed one for the end keyframe. Everything outside the start box is dimmed."""
     from PIL import Image, ImageDraw
@@ -62,7 +63,7 @@ def source_view_png(clip: Path, framing: dict | None, layout: str, width: int = 
     sw, sh = probe_size(clip)
     img = Image.open(io.BytesIO(_ffmpeg_png(["-i", str(clip), "-vf", f"scale={width}:-2"]))).convert("RGB")
     k = img.width / sw
-    w, h = box_for(layout)
+    w, h = box_for(layout, pip)
     f = fr.normalize(framing)
 
     def rect(kf):
@@ -84,7 +85,7 @@ def source_view_png(clip: Path, framing: dict | None, layout: str, width: int = 
 
 
 def render_clip_preview(clip: Path, main_video: Path | None, start: float, end: float, layout: str,
-                        framing: dict | None, face_y: float, out_path: Path) -> Path:
+                        framing: dict | None, face_y: float, out_path: Path, pip: dict | None = None) -> Path:
     """A short real render of just this slot: the speaker video (or grey if it is gone) with the B-roll laid
     over it exactly as in the final export. Fast settings, same filter graph."""
     ffmpeg = require_binary("ffmpeg")
@@ -101,7 +102,7 @@ def render_clip_preview(clip: Path, main_video: Path | None, start: float, end: 
     if r.returncode != 0 or not seg.is_file():
         raise PreviewError(f"Could not cut the speaker video: {r.stderr.strip()[-300:]}")
     try:
-        return render(seg, [Overlay(clip, 0.0, duration, layout=layout, framing=framing)], out_path,
+        return render(seg, [Overlay(clip, 0.0, duration, layout=layout, framing=framing, pip=pip)], out_path,
                       face_y=face_y, preset="ultrafast", crf=28)
     except RenderError as exc:
         raise PreviewError(str(exc)) from exc

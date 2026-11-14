@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.config import workdir_root
 
-KEEP_NAMES = {"final.mp4", "plan.json", "transcript.json", "job.json"}
+KEEP_NAMES = {"final.mp4", "plan.json", "transcript.json", "job.json", "chat.json"}  # chat.json: a few KB
 KEEP_PREFIXES = ("captions_",)  # cached caption rewrites are tiny and avoid repeat Gemini calls
 BUDGET_GB = 32.0
 

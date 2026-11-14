@@ -15,6 +15,8 @@ from src.planning.layouts import LAYOUTS, STYLES, assign_layouts
 from src.planning.prompt import INTRO_SAFE_S
 from src.rendering import framing as framing_mod
 from src.rendering import pipeline as rendering
+from src.rendering.ass import MAX_TEXT_LEN, normalize_text_style
+from src.rendering.compose import PIP_POSITIONS, normalize_pip
 from src.sourcing import pipeline as sourcing
 from src.sourcing.youtube import _probe as probe_clip
 from src.transcription import pipeline as transcription
@@ -338,16 +340,32 @@ def set_framing(job_dir: Path, item_id: int, framing: dict) -> dict:
 
 def set_layout(job_dir: Path, item_id: int, layout: str) -> dict:
     if layout not in LAYOUTS:
-        raise WorkflowError(f"Unknown layout '{layout}'.")
+        raise WorkflowError(f"Unknown layout '{layout}'. Choose one of: {', '.join(LAYOUTS)}.")
     plan = load_plan(job_dir)
     item = _item(plan, item_id)
     item["layout"] = layout
+    if layout == "pip":
+        item["pip"] = normalize_pip(item.get("pip"))
+    _save(job_dir, plan)
+    return item
+
+
+def set_pip(job_dir: Path, item_id: int, pos: str | None = None, scale: float | None = None) -> dict:
+    """Where (and how big) a picture-in-picture slot sits. Also switches the slot to the pip layout."""
+    if pos is not None and pos not in PIP_POSITIONS:
+        raise WorkflowError(f"Unknown position '{pos}'. Choose one of: {', '.join(PIP_POSITIONS)}.")
+    plan = load_plan(job_dir)
+    item = _item(plan, item_id)
+    cur = normalize_pip(item.get("pip"))
+    item["pip"] = normalize_pip({"pos": pos or cur["pos"], "scale": cur["scale"] if scale is None else scale})
+    item["layout"] = "pip"
     _save(job_dir, plan)
     return item
 
 
 def apply_style(job_dir: Path, style: str) -> None:
-    """Switch the video style and reset every slot's layout to it. Hybrid restores the AI's own picks."""
+    """Switch the video style and reset every slot's layout to it. Hybrid restores the AI's own picks.
+    Picture-in-picture slots are a deliberate choice, so they keep their layout."""
     if style not in STYLES:
         raise WorkflowError(f"Unknown video style '{style}'.")
     write_job_meta(job_dir, style=style)
@@ -356,8 +374,179 @@ def apply_style(job_dir: Path, style: str) -> None:
     plan = load_plan(job_dir)
     items = sorted(plan["items"], key=lambda i: i["timestamp_start"])
     for item, layout in zip(items, assign_layouts([i.get("ai_layout") for i in items], style)):
-        item["layout"] = layout
+        if item.get("layout") != "pip":
+            item["layout"] = layout
     plan["style"] = style
+    _save(job_dir, plan)
+
+
+# ----------------------------------------------------------------------------- adding / replacing slots (chat)
+def _check_room(plan: dict, start: float, end: float, ignore_id: int | None = None) -> tuple[float, float]:
+    """Validate a new slot's time range against the video and the other slots; returns the rounded range."""
+    start, end = round(float(start), 2), round(float(end), 2)
+    if end - start < MIN_SLOT_S - 1e-6:
+        raise WorkflowError(f"A slot must last at least {MIN_SLOT_S:g} seconds.")
+    if start < INTRO_SAFE_S - 1e-6:
+        raise WorkflowError(f"A slot cannot start before {INTRO_SAFE_S:g}s (the speaker owns the opening).")
+    duration = float(plan.get("video_duration") or 0.0)
+    if duration and end > duration + 1e-6:
+        raise WorkflowError(f"The video is only {duration:g}s long, so a slot cannot end at {end:g}s.")
+    for it in plan["items"]:
+        if it["id"] == ignore_id:
+            continue
+        if start < it["timestamp_end"] + EDIT_GAP_S - 1e-6 and end > it["timestamp_start"] - EDIT_GAP_S + 1e-6:
+            state = " (removed, but it still holds its place; delete it to free the space)" \
+                if it.get("enabled") is False else ""
+            raise WorkflowError(f"That overlaps slot #{it['id']} ({it['timestamp_start']:g}s to "
+                                f"{it['timestamp_end']:g}s){state}.")
+    return start, end
+
+
+def free_gaps(job_dir: Path) -> list[tuple[float, float]]:
+    """Stretches of the timeline where a new slot would fit (at least MIN_SLOT_S long)."""
+    plan = load_plan(job_dir)
+    duration = float(plan.get("video_duration") or 0.0)
+    gaps, cursor = [], INTRO_SAFE_S
+    for it in sorted(plan["items"], key=lambda i: i["timestamp_start"]):
+        gap_end = it["timestamp_start"] - EDIT_GAP_S
+        if gap_end - cursor >= MIN_SLOT_S:
+            gaps.append((round(cursor, 2), round(gap_end, 2)))
+        cursor = max(cursor, it["timestamp_end"] + EDIT_GAP_S)
+    if duration - cursor >= MIN_SLOT_S:
+        gaps.append((round(cursor, 2), round(duration, 2)))
+    return gaps
+
+
+def _file_clip(job_dir: Path, clip_file: Path, item_id: int) -> str:
+    """Move a finished clip to clips/clip_NN.<ext> (the slot owns that name) and return the relative path."""
+    clips = job_dir / "clips"
+    clips.mkdir(parents=True, exist_ok=True)
+    target = clips / f"clip_{item_id:02d}{clip_file.suffix.lower()}"
+    for old in clips.glob(f"clip_{item_id:02d}.*"):
+        if old.resolve() != clip_file.resolve():
+            old.unlink(missing_ok=True)  # a stale clip with another extension, or the one being replaced
+    if clip_file.resolve() != target.resolve():
+        shutil.move(str(clip_file), str(target))
+    return f"clips/{target.name}"
+
+
+def _check_clip_fits(start: float, end: float, asset: dict) -> None:
+    have = asset.get("clip_duration")
+    if have is not None and end - start > float(have) + 0.05:
+        raise WorkflowError(f"The clip has only {float(have):.1f}s but the slot is {end - start:.1f}s. "
+                            "Use a shorter slot or a longer clip.")
+
+
+def add_slot(job_dir: Path, start: float, end: float, clip_file: Path, asset: dict, asset_type: str = "image",
+             layout: str = "overlay", pip: dict | None = None, spoken_text: str = "", meaning: str = "",
+             reason: str = "Added from the chat assistant") -> dict:
+    """Add a brand-new slot (e.g. a picture or a pasted YouTube clip) at [start, end]. `clip_file` is a finished
+    clip; it is moved into clips/ under the new slot's id. Nothing is changed if the range doesn't fit."""
+    if asset_type not in ("video", "image"):
+        raise WorkflowError(f"Unknown asset type '{asset_type}'.")
+    if layout not in LAYOUTS:
+        raise WorkflowError(f"Unknown layout '{layout}'. Choose one of: {', '.join(LAYOUTS)}.")
+    plan = load_plan(job_dir)
+    start, end = _check_room(plan, start, end)
+    _check_clip_fits(start, end, asset)
+    new_id = max((i["id"] for i in plan["items"]), default=0) + 1
+    asset = {**asset, "status": "ok", "path": _file_clip(job_dir, Path(clip_file), new_id)}
+    item = {
+        "id": new_id, "asset_type": asset_type, "timestamp_start": start, "timestamp_end": end,
+        "search_query": asset.get("query_used") or asset.get("title") or "", "alternative_queries": [],
+        "spoken_text": spoken_text, "english_meaning": meaning, "reasoning": reason,
+        "layout": layout, "ai_layout": layout if layout in ("overlay", "split") else "overlay",
+        "enabled": True, "user_edited_query": True, "asset": asset,
+    }
+    if layout == "pip":
+        item["pip"] = normalize_pip(pip)
+    plan["items"].append(item)
+    plan["items"].sort(key=lambda i: i["timestamp_start"])
+    _save(job_dir, plan)
+    return item
+
+
+def set_asset(job_dir: Path, item_id: int, clip_file: Path, asset: dict, asset_type: str = "image") -> dict:
+    """Put a different finished clip into an existing slot (timing, layout and position stay)."""
+    if asset_type not in ("video", "image"):
+        raise WorkflowError(f"Unknown asset type '{asset_type}'.")
+    plan = load_plan(job_dir)
+    item = _item(plan, item_id)
+    _check_clip_fits(item["timestamp_start"], item["timestamp_end"], asset)
+    item["asset"] = {**asset, "status": "ok", "path": _file_clip(job_dir, Path(clip_file), item_id)}
+    item["asset_type"] = asset_type
+    item["framing"] = framing_mod.default_framing()
+    item["enabled"] = True
+    if asset.get("query_used") or asset.get("title"):
+        item["search_query"] = asset.get("query_used") or asset.get("title")
+    item["user_edited_query"] = True
+    _save(job_dir, plan)
+    return item
+
+
+def delete_slot(job_dir: Path, item_id: int) -> None:
+    """Remove a slot completely (unlike `set_enabled`, which keeps its place) and delete its clip file."""
+    plan = load_plan(job_dir)
+    item = _item(plan, item_id)
+    plan["items"] = [i for i in plan["items"] if i["id"] != item_id]
+    _save(job_dir, plan)
+    for f in (job_dir / "clips").glob(f"clip_{item['id']:02d}.*"):
+        f.unlink(missing_ok=True)
+
+
+# ----------------------------------------------------------------------------- text overlays (chat)
+MIN_TEXT_S = 0.5
+
+
+def _check_text(plan: dict, text: str, start: float, end: float) -> tuple[str, float, float]:
+    text = " ".join(str(text).split())
+    if not text:
+        raise WorkflowError("The text cannot be empty.")
+    if len(text) > MAX_TEXT_LEN:
+        raise WorkflowError(f"Keep the text under {MAX_TEXT_LEN} characters.")
+    start, end = round(float(start), 2), round(float(end), 2)
+    if start < 0 or end - start < MIN_TEXT_S - 1e-6:
+        raise WorkflowError(f"Text must last at least {MIN_TEXT_S:g}s and start at 0s or later.")
+    duration = float(plan.get("video_duration") or 0.0)
+    if duration and end > duration + 1e-6:
+        raise WorkflowError(f"The video is only {duration:g}s long, so the text cannot end at {end:g}s.")
+    return text, start, end
+
+
+def add_text(job_dir: Path, text: str, start: float, end: float, **style) -> dict:
+    """A timed text overlay on the video. `style` may hold pos, size, color, font (see rendering/ass.py)."""
+    plan = load_plan(job_dir)
+    text, start, end = _check_text(plan, text, start, end)
+    texts = plan.setdefault("texts", [])
+    entry = {"id": max((t["id"] for t in texts), default=0) + 1, "text": text, "start": start, "end": end,
+             **normalize_text_style(style)}
+    texts.append(entry)
+    _save(job_dir, plan)
+    return entry
+
+
+def _text(plan: dict, text_id: int) -> dict:
+    for t in plan.get("texts", []):
+        if t["id"] == text_id:
+            return t
+    raise WorkflowError(f"No text overlay with id {text_id}.")
+
+
+def update_text(job_dir: Path, text_id: int, **fields) -> dict:
+    """Change any of: text, start, end, pos, size, color, font."""
+    plan = load_plan(job_dir)
+    entry = _text(plan, text_id)
+    merged = {**entry, **{k: v for k, v in fields.items() if v is not None}}
+    entry["text"], entry["start"], entry["end"] = _check_text(plan, merged["text"], merged["start"], merged["end"])
+    entry.update(normalize_text_style(merged))
+    _save(job_dir, plan)
+    return entry
+
+
+def remove_text(job_dir: Path, text_id: int) -> None:
+    plan = load_plan(job_dir)
+    _text(plan, text_id)
+    plan["texts"] = [t for t in plan["texts"] if t["id"] != text_id]
     _save(job_dir, plan)
 
 

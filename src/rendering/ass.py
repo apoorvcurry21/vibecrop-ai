@@ -34,6 +34,7 @@ Style: CaptionDeva,{DEVA_FONT},70,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1
 Style: CreditSplit,{LATIN_FONT},34,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2.5,0,2,40,40,{SPLIT_CREDIT_MARGIN_V},1
 Style: CaptionLatinSplit,{LATIN_FONT},74,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,5,60,60,0,1
 Style: CaptionDevaSplit,{DEVA_FONT},70,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,5,60,60,0,1
+Style: Text,{LATIN_FONT},104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,2,8,60,60,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -53,9 +54,67 @@ def escape(text: str) -> str:
     return " ".join(text.replace("{", "(").replace("}", ")").replace("\\", "/").split())
 
 
-def credit_event(start: float, end: float, channel: str, split: bool = False) -> str:
+def credit_event(start: float, end: float, channel: str, split: bool = False, text: str | None = None) -> str:
+    """The small credit line. `text` overrides the default "Video: <channel>" (e.g. "Image: example.com")."""
     style = "CreditSplit" if split else "Credit"
-    return f"Dialogue: 0,{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{escape('Video: ' + channel)}"
+    return f"Dialogue: 0,{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{escape(text or 'Video: ' + channel)}"
+
+
+# ---------------------------------------------------------------- text overlays (set from the chat assistant)
+# position -> (ASS alignment, x, y). The anchor point is where the text is pinned, so "bottom" text grows upwards.
+TEXT_POSITIONS = {
+    "top-left": (7, 60, 200), "top": (8, 540, 200), "top-right": (9, 1020, 200),
+    "center-left": (4, 60, 960), "center": (5, 540, 960), "center-right": (6, 1020, 960),
+    "bottom-left": (1, 60, 1260), "bottom": (2, 540, 1260), "bottom-right": (3, 1020, 1260),
+}
+TEXT_SIZES = {"small": 54, "medium": 76, "large": 104, "xl": 140}
+TEXT_COLORS = {
+    "white": "FFFFFF", "yellow": "FFD60A", "red": "FF3B30", "green": "34C759", "blue": "0A84FF",
+    "orange": "FF9500", "pink": "FF2D92", "black": "000000", "cyan": "40DCFF",
+}
+TEXT_FONTS = {"bold": "Arial", "impact": "Impact", "serif": "Georgia"}  # all drawn bold with a dark outline
+TEXT_DEFAULT = {"pos": "top", "size": "large", "color": "white", "font": "bold"}
+MAX_TEXT_LEN = 120
+HEX_COLOR = re.compile(r"^#?([0-9a-fA-F]{6})$")
+
+
+def normalize_text_style(spec: dict | None) -> dict:
+    """Validate pos/size/color/font. Unknown values fall back to the defaults; size may also be a number of
+    pixels (30-220) and color a '#RRGGBB' hex."""
+    spec = spec or {}
+    pos = spec.get("pos") if spec.get("pos") in TEXT_POSITIONS else TEXT_DEFAULT["pos"]
+    size = spec.get("size")
+    if isinstance(size, (int, float)) and not isinstance(size, bool):
+        size = int(min(max(size, 30), 220))
+    elif size not in TEXT_SIZES:
+        size = TEXT_DEFAULT["size"]
+    color = str(spec.get("color") or "").strip().lower()
+    if color not in TEXT_COLORS:
+        m = HEX_COLOR.match(color)
+        color = m.group(1).upper() if m else TEXT_DEFAULT["color"]
+    font = spec.get("font") if spec.get("font") in TEXT_FONTS else TEXT_DEFAULT["font"]
+    return {"pos": pos, "size": size, "color": color, "font": font}
+
+
+def _ass_color(color: str) -> str:
+    rgb = TEXT_COLORS.get(color, color)
+    return f"&H00{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}&"  # ASS colours are BGR
+
+
+def text_events(texts: list[dict]) -> list[str]:
+    """One timed text overlay per entry of plan["texts"] (each {text, start, end, pos, size, color, font})."""
+    events = []
+    for t in texts or []:
+        body = escape(str(t.get("text", "")))[:MAX_TEXT_LEN]
+        if not body or float(t.get("end", 0)) <= float(t.get("start", 0)):
+            continue
+        s = normalize_text_style(t)
+        an, x, y = TEXT_POSITIONS[s["pos"]]
+        size = TEXT_SIZES.get(s["size"], s["size"])
+        font = DEVA_FONT if DEVANAGARI.search(body) else TEXT_FONTS[s["font"]]
+        tags = f"{{\\an{an}\\pos({x},{y})\\fn{font}\\fs{size}\\c{_ass_color(s['color'])}\\fad(150,150)}}"
+        events.append(f"Dialogue: 2,{ass_time(float(t['start']))},{ass_time(float(t['end']))},Text,,0,0,0,,{tags}{body}")
+    return events
 
 
 def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | None = None) -> list[str]:

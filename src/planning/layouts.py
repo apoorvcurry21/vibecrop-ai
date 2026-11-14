@@ -8,7 +8,8 @@ Styles:
 from __future__ import annotations
 
 STYLES = ("overlay", "split", "hybrid")
-LAYOUTS = ("overlay", "split")
+PLANNER_LAYOUTS = ("overlay", "split")  # what a video style / the AI planner can assign
+LAYOUTS = PLANNER_LAYOUTS + ("pip",)  # "pip" (picture-in-picture) is only ever chosen by the user or the chat assistant
 MAX_RUN = 3  # hybrid: never more than this many slots in a row with the same layout
 
 STYLE_LABELS = {
@@ -32,7 +33,7 @@ def assign_layouts(suggested: list[str | None], style: str) -> list[str]:
         return ["overlay"] * n
     if style == "split":
         return ["split"] * n
-    picks = [s if s in LAYOUTS else None for s in suggested]
+    picks = [s if s in PLANNER_LAYOUTS else None for s in suggested]
     if n >= 2 and (None in picks or len(set(picks)) < 2):
         return _alternate(n)
     out: list[str] = []

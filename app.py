@@ -29,7 +29,7 @@ from src.planning.layouts import LAYOUTS, STYLE_LABELS, STYLES  # noqa: E402
 from src.planning.prompt import feasible_max  # noqa: E402
 from src.rendering import framing as framing_mod  # noqa: E402
 from src.rendering import preview  # noqa: E402
-from src.rendering.compose import DEFAULT_FACE_Y  # noqa: E402
+from src.rendering.compose import DEFAULT_FACE_Y, PIP_MAX_SCALE, PIP_MIN_SCALE, normalize_pip  # noqa: E402
 
 
 def open_job(path: Path | None) -> None:
@@ -56,19 +56,23 @@ def fail(exc: Exception) -> None:
     st.error(str(exc))
 
 
-LAYOUT_LABELS = {"overlay": "Overlay (full screen)", "split": "Split (b-roll on top, facecam below)"}
-LAYOUT_COLORS = {"overlay": "#3b82f6", "split": "#10b981"}
+LAYOUT_LABELS = {"overlay": "Overlay (full screen)", "split": "Split (b-roll on top, facecam below)",
+                 "pip": "Picture-in-picture (small box over you)"}
+LAYOUT_COLORS = {"overlay": "#3b82f6", "split": "#10b981", "pip": "#f59e0b"}
+PIP_POSITION_LABELS = {"top-left": "Top left", "top": "Top", "top-right": "Top right", "center": "Center",
+                       "bottom-left": "Bottom left", "bottom": "Bottom", "bottom-right": "Bottom right"}
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
 def cached_frame(clip: str, mtime: float, framing_json: str, layout: str, duration: float, at: str,
-                 clip_len: float | None) -> bytes:
-    return preview.frame_png(Path(clip), json.loads(framing_json), layout, duration, at, clip_len)
+                 clip_len: float | None, pip_json: str = "null") -> bytes:
+    return preview.frame_png(Path(clip), json.loads(framing_json), layout, duration, at, clip_len,
+                             pip=json.loads(pip_json))
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def cached_source_view(clip: str, mtime: float, framing_json: str, layout: str) -> bytes:
-    return preview.source_view_png(Path(clip), json.loads(framing_json), layout)
+def cached_source_view(clip: str, mtime: float, framing_json: str, layout: str, pip_json: str = "null") -> bytes:
+    return preview.source_view_png(Path(clip), json.loads(framing_json), layout, pip=json.loads(pip_json))
 
 
 def flash(*messages: str) -> None:
@@ -111,7 +115,7 @@ def slot_editor(job: Path, item_id: int) -> None:
     """Layout, timing, swap and zoom/pan keyframes for one slot. It is a fragment: moving a slider reruns only
     this editor, not the whole page. Actions that change other slots call st.rerun() (the full page)."""
     plan = workflow.load_plan(job)
-    items = sorted(plan["items"], key=lambda i: i["id"])
+    items = sorted(plan["items"], key=lambda i: i["timestamp_start"])  # timeline order (the chat can add slots in between)
     item = next(i for i in items if i["id"] == item_id)
     pos = items.index(item)
     asset = item.get("asset") or {}
@@ -119,9 +123,10 @@ def slot_editor(job: Path, item_id: int) -> None:
     start, end = item["timestamp_start"], item["timestamp_end"]
     saved = framing_mod.normalize(item.get("framing"))
     layout = item.get("layout", "overlay")
+    saved_pip = normalize_pip(item.get("pip"))
     # Widget keys carry a fingerprint of what is saved, so after a swap / reset / save the widgets show the new
     # saved values instead of stale ones.
-    ver = hashlib.md5(json.dumps([saved, layout, start, end, asset.get("path")]).encode()).hexdigest()[:6]
+    ver = hashlib.md5(json.dumps([saved, layout, saved_pip, start, end, asset.get("path")]).encode()).hexdigest()[:6]
 
     def k(name: str) -> str:
         return f"{name}{item_id}_{ver}"
@@ -134,6 +139,17 @@ def slot_editor(job: Path, item_id: int) -> None:
         if new_layout != layout:
             workflow.set_layout(job, item_id, new_layout)
             st.rerun()
+        if layout == "pip":
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                new_pos = st.selectbox("Position", list(PIP_POSITION_LABELS), index=list(PIP_POSITION_LABELS).index(
+                    saved_pip["pos"]), format_func=PIP_POSITION_LABELS.get, key=k("pippos"))
+            with pc2:
+                new_scale = st.slider("Size", PIP_MIN_SCALE, PIP_MAX_SCALE, float(saved_pip["scale"]), 0.05,
+                                      key=k("pipscale"))
+            if (new_pos, round(new_scale, 2)) != (saved_pip["pos"], saved_pip["scale"]):
+                workflow.set_pip(job, item_id, pos=new_pos, scale=new_scale)
+                st.rerun()
     with c2:
         if st.button("Swap with previous", key=k("up"), disabled=pos == 0,
                      help="Trade clips with the slot before this one (timings stay where they are)."):
@@ -218,18 +234,19 @@ def slot_editor(job: Path, item_id: int) -> None:
     view = st.radio("Preview as", ["9:16 (as exported)", "16:9 (whole clip, crop outlined)"], horizontal=True,
                     key=f"view{item_id}")
     framing_json, mtime = json.dumps(framing_mod.normalize(cur)), clip.stat().st_mtime
-    half = " (top half)" if new_layout == "split" else ""
+    pip_json = json.dumps(saved_pip) if new_layout == "pip" else "null"
+    half = {"split": " (top half)", "pip": " (the small box)"}.get(new_layout, "")
     try:
         if view.startswith("9:16"):
             a, b = st.columns(2)
             with a:
-                st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "start", clip_len),
-                         caption="First frame of the slot" + half)
+                st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "start", clip_len,
+                                      pip_json), caption="First frame of the slot" + half)
             with b:
-                st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "end", clip_len),
-                         caption="Last frame of the slot" + half)
+                st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "end", clip_len,
+                                      pip_json), caption="Last frame of the slot" + half)
         else:
-            st.image(cached_source_view(str(clip), mtime, framing_json, new_layout),
+            st.image(cached_source_view(str(clip), mtime, framing_json, new_layout, pip_json),
                      caption="Yellow solid box = what shows at the start; blue dashed = at the end. "
                              "The dimmed part is cut off.")
     except Exception as exc:  # noqa: BLE001
@@ -241,7 +258,7 @@ def slot_editor(job: Path, item_id: int) -> None:
                 face_y = float(workflow.read_job_meta(job).get("split_face_y", DEFAULT_FACE_Y))
                 out = preview.render_clip_preview(
                     clip, workflow.source_video_path(job), start, end, new_layout, framing_mod.normalize(cur),
-                    face_y, job / "previews" / f"slot_{item_id}.mp4")
+                    face_y, job / "previews" / f"slot_{item_id}.mp4", pip=saved_pip if new_layout == "pip" else None)
                 st.session_state[f"playing{item_id}"] = str(out)
             except Exception as exc:  # noqa: BLE001
                 fail(exc)
@@ -399,8 +416,8 @@ if workflow.needs_pipeline(job):
 
 # ---------------------------------------------------------------- step 3: review
 plan = workflow.load_plan(job)
-items = plan["items"]
-ready = sum(1 for i in items if (i.get("asset") or {}).get("status") == "ok" and i.get("enabled") is not False)
+items = sorted(plan["items"], key=lambda i: i["timestamp_start"])  # timeline order
+ready =sum(1 for i in items if (i.get("asset") or {}).get("status") == "ok" and i.get("enabled") is not False)
 final = job / "final.mp4"
 
 st.subheader("3. Review the plan")

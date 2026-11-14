@@ -12,7 +12,7 @@ from typing import Callable
 from src import config
 from src.captions.chunks import chunk_words
 from src.captions.rewrite import MODES, CaptionError, rewrite_chunks
-from src.rendering.ass import caption_events, credit_event, write_ass
+from src.rendering.ass import caption_events, credit_event, text_events, write_ass
 from src.rendering.compose import DEFAULT_FACE_Y, LAYOUTS, Overlay, RenderError, render
 
 
@@ -48,16 +48,19 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
         if item.get("enabled") is False:
             log(f"[{item['id']:>2}] removed by you, speaker stays on screen")
             continue
-        if item["asset_type"] != "video" or asset.get("status") != "ok" or not clip.is_file():
+        # Image slots (placed from the chat) are stored as still clips too, so only a sourced clip counts here.
+        if asset.get("status") != "ok" or not clip.is_file():
             log(f"[{item['id']:>2}] no clip, speaker stays on screen for this slot")
             continue
         start, end = item["timestamp_start"], item["timestamp_end"]
         layout = item.get("layout") if item.get("layout") in LAYOUTS else "overlay"
-        overlays.append(Overlay(clip, start, end, layout=layout, framing=item.get("framing")))
+        overlays.append(Overlay(clip, start, end, layout=layout, framing=item.get("framing"),
+                                pip=item.get("pip") if layout == "pip" else None))
         if layout == "split":
             split_spans.append((start, end))
-        if credits and asset.get("channel"):
-            events.append(credit_event(start, end, asset["channel"], split=layout == "split"))
+        if credits and (asset.get("credit") or asset.get("channel")):
+            events.append(credit_event(start, end, asset.get("channel", ""), split=layout == "split",
+                                       text=asset.get("credit")))
 
     if caption_mode:
         if caption_mode not in MODES:
@@ -72,6 +75,8 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
             log(f"Caption rewrite failed ({exc}); using the original captions instead.")
             chunks = load_caption_chunks(job_dir, "original", transcript)
         events += caption_events(chunks, split_spans)
+
+    events += text_events(plan.get("texts", []))
 
     ass_name = None
     if events:
