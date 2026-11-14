@@ -31,8 +31,9 @@ def pick_window(source_duration: float, slot_seconds: float) -> tuple[float, flo
 
 
 def search_candidates(query: str, skip_ids: set[str] | frozenset[str] = frozenset(),
-                      limit: int = SEARCH_N) -> list[dict]:
-    """YouTube search via yt-dlp (metadata only). Returns usable candidates in rank order."""
+                      limit: int = SEARCH_N, min_s: float = MIN_SOURCE_S, max_s: float = MAX_SOURCE_S) -> list[dict]:
+    """YouTube search via yt-dlp (metadata only). Returns usable candidates in rank order.
+    `min_s` / `max_s` bound the video length (sound effects are short, so they ask for much less than B-roll)."""
     from yt_dlp import YoutubeDL
 
     opts = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True}
@@ -47,7 +48,7 @@ def search_candidates(query: str, skip_ids: set[str] | frozenset[str] = frozense
         vid, dur = e.get("id"), e.get("duration")
         if not vid or vid in skip_ids or dur is None:
             continue
-        if not MIN_SOURCE_S <= float(dur) <= MAX_SOURCE_S:
+        if not min_s <= float(dur) <= max_s:
             continue
         if e.get("live_status") in ("is_live", "is_upcoming"):
             continue
@@ -97,6 +98,47 @@ def download_section(candidate: dict, start: float, end: float, out_stem: Path) 
         path = matches[0] if matches else None
     if path is None:
         raise SourcingError("yt-dlp finished but no file was written.")
+    return path
+
+
+AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
+
+
+def probe_audio_duration(path: Path) -> float:
+    """Length in seconds of the first audio stream, 0.0 if there is none or the file is unreadable."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "format=duration",
+         "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True)
+    try:
+        return float(out.stdout.strip()) if out.returncode == 0 else 0.0
+    except ValueError:
+        return 0.0
+
+
+def download_audio_section(candidate: dict, start: float, end: float, out_stem: Path) -> Path:
+    """Download only the audio of [start, end] seconds (same section download as `download_section`, audio format)."""
+    from yt_dlp import YoutubeDL
+    from yt_dlp.utils import download_range_func
+
+    out_stem.parent.mkdir(parents=True, exist_ok=True)
+    opts: dict[str, Any] = {
+        "quiet": True, "no_warnings": True, "noprogress": True,
+        "format": AUDIO_FORMAT,
+        "download_ranges": download_range_func(None, [(start, end)]),
+        "force_keyframes_at_cuts": True,
+        "outtmpl": str(out_stem) + ".%(ext)s",
+        "overwrites": True,
+        "retries": 3,
+    }
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(candidate["url"], download=True)
+    downloads = (info or {}).get("requested_downloads") or []
+    path = Path(downloads[0]["filepath"]) if downloads else None
+    if path is None or not path.is_file():
+        matches = sorted(out_stem.parent.glob(out_stem.name + ".*"))
+        path = matches[0] if matches else None
+    if path is None:
+        raise SourcingError("yt-dlp finished but no audio file was written.")
     return path
 
 

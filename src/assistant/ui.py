@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.assistant import agent, assets, media_tools, snapshots, store, style
 from src.assistant.tools import Attachment
+from src.sfx import library
 
 VISIBLE_MESSAGES = 50  # older ones stay in chat.json but are not drawn
 BOX_HEIGHT = 440
@@ -37,6 +38,11 @@ def _render_cards(job: Path, cards: list[dict], key: str = "live") -> None:
     for ci, card in enumerate(cards or []):
         if card.get("type") == "image" and (job / card.get("path", "x")).is_file():
             st.image(str(job / card["path"]), caption=card.get("caption"), width=220)
+        elif card.get("type") == "sound":
+            entry = library.get(card.get("lib_id", ""))
+            if entry is not None and library.available(entry):
+                st.caption(f"🔊 {card.get('caption') or entry['name']}")
+                st.audio(str(library.path_of(entry)))
         elif card.get("type") == "layouts":
             _render_layouts(card, key, ci)
         elif card.get("type") == "choices":

@@ -32,6 +32,7 @@ from src.planning.prompt import feasible_max  # noqa: E402
 from src.rendering import framing as framing_mod  # noqa: E402
 from src.rendering import preview  # noqa: E402
 from src.rendering.compose import DEFAULT_FACE_Y, PIP_MAX_SCALE, PIP_MIN_SCALE, normalize_pip  # noqa: E402
+from src.sfx import library as sfx_library  # noqa: E402
 
 
 def open_job(path: Path | None) -> None:
@@ -113,6 +114,65 @@ def rerun_fragment() -> None:
         st.rerun(scope="fragment")
     except st.errors.StreamlitAPIException:
         st.rerun()
+
+
+@st.fragment
+def sfx_panel(job: Path) -> None:
+    """Sound effects on the video: listen, move, change the volume, delete, add from the library. A fragment, so
+    every click here reruns only this panel. (The chat can also add sounds by name, phrase or YouTube link.)"""
+    plan = workflow.load_plan(job)
+    sounds = plan.get("sounds", [])
+    duration = float(plan.get("video_duration") or 0.0) or 600.0
+    library = [e for e in sfx_library.load() if sfx_library.available(e)]
+    if not library:
+        st.info("The sound library is empty. Download it once with `python scripts/build_sfx_library.py` (about 53 "
+                "meme and utility sounds, kept on this PC only). Meanwhile you can still ask the chat for any sound "
+                "by name or YouTube link.")
+    st.caption("Sounds play in the exported video only (the previews above are silent). Volume 1 = as recorded; "
+               "new sounds start a little under the voice.")
+    for s in sounds:
+        entry = sfx_library.get(s["lib_id"])
+        ver = f"{s['id']}_{s['start']}_{s['volume']}"  # widgets follow what is saved (e.g. after a chat change)
+        c1, c2, c3, c4 = st.columns([3, 2, 3, 1], vertical_alignment="center")
+        with c1:
+            st.markdown(f"**{s.get('label') or s['lib_id']}**")
+            if entry is not None and sfx_library.available(entry):
+                st.audio(str(sfx_library.path_of(entry)))
+            else:
+                st.caption("Missing from the library: it will be skipped.")
+        with c2:
+            at = st.number_input("At (seconds)", 0.0, duration, float(s["start"]), 0.1, key=f"snd_at_{ver}")
+        with c3:
+            vol = st.slider("Volume", 0.0, workflow.MAX_SOUND_VOLUME, float(s["volume"]), 0.05, key=f"snd_vol_{ver}")
+        with c4:
+            gone = st.button("Delete", key=f"snd_del_{ver}")
+        if gone:
+            workflow.remove_sound(job, s["id"])
+            rerun_fragment()
+        if abs(at - s["start"]) > 1e-6 or abs(vol - s["volume"]) > 1e-6:
+            try:
+                workflow.update_sound(job, s["id"], start=at, volume=vol)
+            except workflow.WorkflowError as exc:
+                fail(exc)
+            rerun_fragment()
+    if library:
+        st.markdown("**Add a sound**")
+        a1, a2, a3 = st.columns([3, 2, 1], vertical_alignment="bottom")
+        with a1:
+            pick = st.selectbox("Sound", [e["id"] for e in library], key="sfx_pick",
+                                format_func=lambda i: next(e["name"] for e in library if e["id"] == i))
+        with a2:
+            when = st.number_input("At (seconds)", 0.0, duration, 0.0, 0.1, key="sfx_when")
+        with a3:
+            if st.button("Add", key="sfx_add", type="primary"):
+                try:
+                    workflow.add_sound(job, pick, when)
+                except workflow.WorkflowError as exc:
+                    fail(exc)
+                rerun_fragment()
+    if sounds and st.button("Remove all sounds", key="sfx_clear"):
+        workflow.remove_sound(job)
+        rerun_fragment()
 
 
 @st.cache_data(show_spinner=False, max_entries=96)
@@ -625,6 +685,10 @@ for item in items:
 # ---------------------------------------------------------------- captions: style + highlighted words
 with st.expander("Captions: style and highlighted words"):
     captions_panel(job)
+
+# ---------------------------------------------------------------- sound effects
+with st.expander(f"Sound effects ({len(plan.get('sounds', []))})"):
+    sfx_panel(job)
 
 # ---------------------------------------------------------------- step 4: render
 st.subheader("4. Export")

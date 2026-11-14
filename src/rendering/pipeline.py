@@ -14,7 +14,8 @@ from src.captions import styles
 from src.captions.chunks import chunk_words
 from src.captions.rewrite import MODES, CaptionError, rewrite_chunks
 from src.rendering.ass import caption_events, credit_event, text_events, write_ass
-from src.rendering.compose import DEFAULT_FACE_Y, LAYOUTS, Overlay, RenderError, render
+from src.rendering.compose import DEFAULT_FACE_Y, LAYOUTS, Overlay, RenderError, Sound, render
+from src.sfx import library as sfx_library
 
 
 def load_caption_chunks(job_dir: Path, mode: str, transcript: dict, topic: str = "",
@@ -82,15 +83,24 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
 
     events += text_events(plan.get("texts", []))
 
+    sounds: list[Sound] = []
+    for s in sorted(plan.get("sounds", []), key=lambda s: s.get("start", 0)):
+        entry = sfx_library.get(s.get("lib_id", ""))
+        if entry is None or not sfx_library.available(entry):
+            log(f"Sound '{s.get('label') or s.get('lib_id')}' is missing from the sound library, skipped.")
+            continue
+        sounds.append(Sound(sfx_library.path_of(entry), float(s["start"]), float(s.get("volume", 1.0))))
+
     ass_name = None
     if events:
         write_ass(job_dir / "overlays.ass", events, cap["style"])
         ass_name = "overlays.ass"  # relative: FFmpeg runs with cwd=job_dir
 
-    log(f"Rendering {len(overlays)} B-roll overlays" + (f" + {caption_mode} captions..." if caption_mode else "..."))
+    log(f"Rendering {len(overlays)} B-roll overlays" + (f" + {caption_mode} captions" if caption_mode else "")
+        + (f" + {len(sounds)} sound effects" if sounds else "") + "...")
     with perf.stage(job_dir, "render"):
         return render(main_video, overlays, job_dir / "final.mp4", subtitles_file=ass_name, cwd=job_dir,
-                      face_y=face_y, progress=progress, hw=True)
+                      face_y=face_y, progress=progress, hw=True, sounds=sounds)
 
 
 def main() -> None:

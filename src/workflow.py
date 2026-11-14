@@ -12,6 +12,7 @@ from src.captions import styles as caption_styles
 from src.cleanup import purge_job_temp
 from src.planning import pipeline as planning
 from src.planning import recommend
+from src.sfx import library as sfx_library
 from src.planning.layouts import LAYOUTS, STYLES, assign_layouts
 from src.planning.prompt import INTRO_SAFE_S
 from src.rendering import framing as framing_mod
@@ -693,6 +694,82 @@ def remove_emphasis(job_dir: Path, emphasis_id: int | None = None) -> int:
         cap["emphasis"] = [e for e in cap["emphasis"] if e.get("id") != emphasis_id]
     _save(job_dir, plan)
     return before - len(cap["emphasis"])
+
+
+# ---------------------------------------------------------------- sound effects
+DEFAULT_SOUND_VOLUME = 0.8  # a bit under the voice, so an effect does not drown the speaker
+MAX_SOUND_VOLUME = 2.0
+MAX_SOUNDS = 80
+
+
+def _check_sound_time(plan: dict, start: float) -> float:
+    start = round(float(start), 2)
+    if start < 0:
+        raise WorkflowError("A sound cannot start before 0 s.")
+    duration = float(plan.get("video_duration") or 0.0)
+    if duration and start > duration:
+        raise WorkflowError(f"The video is only {duration:g}s long, so a sound cannot start at {start:g}s.")
+    return start
+
+
+def _check_volume(volume) -> float:
+    try:
+        v = DEFAULT_SOUND_VOLUME if volume is None else float(volume)
+    except (TypeError, ValueError) as exc:
+        raise WorkflowError("Volume must be a number between 0 and 2 (1 = as recorded).") from exc
+    if not 0.0 <= v <= MAX_SOUND_VOLUME:
+        raise WorkflowError(f"Volume must be between 0 and {MAX_SOUND_VOLUME:g} (1 = as recorded).")
+    return round(v, 2)
+
+
+def add_sound(job_dir: Path, lib_id: str, start: float, volume=None) -> dict:
+    """Play library sound `lib_id` at `start` seconds on the video timeline (sounds may overlap each other)."""
+    sound = sfx_library.get(lib_id)
+    if sound is None or not sfx_library.available(sound):
+        raise WorkflowError(f"There is no sound '{lib_id}' in the library.")
+    plan = load_plan(job_dir)
+    start, volume = _check_sound_time(plan, start), _check_volume(volume)
+    sounds = plan.setdefault("sounds", [])
+    if len(sounds) >= MAX_SOUNDS:
+        raise WorkflowError(f"At most {MAX_SOUNDS} sound effects per video.")
+    entry = {"id": max((s["id"] for s in sounds), default=0) + 1, "lib_id": lib_id, "label": sound["name"],
+             "start": start, "volume": volume, "length": sound.get("duration")}
+    sounds.append(entry)
+    sounds.sort(key=lambda s: (s["start"], s["id"]))
+    _save(job_dir, plan)
+    return entry
+
+
+def _sound(plan: dict, sound_id: int) -> dict:
+    for s in plan.get("sounds", []):
+        if s["id"] == sound_id:
+            return s
+    raise WorkflowError(f"No sound effect with id {sound_id}.")
+
+
+def update_sound(job_dir: Path, sound_id: int, start=None, volume=None) -> dict:
+    plan = load_plan(job_dir)
+    entry = _sound(plan, sound_id)
+    if start is not None:
+        entry["start"] = _check_sound_time(plan, start)
+    if volume is not None:
+        entry["volume"] = _check_volume(volume)
+    plan["sounds"].sort(key=lambda s: (s["start"], s["id"]))
+    _save(job_dir, plan)
+    return entry
+
+
+def remove_sound(job_dir: Path, sound_id: int | None = None) -> int:
+    """Remove one sound effect, or all of them when no id is given. Returns how many were removed."""
+    plan = load_plan(job_dir)
+    before = len(plan.get("sounds", []))
+    if sound_id is None:
+        plan["sounds"] = []
+    else:
+        _sound(plan, sound_id)
+        plan["sounds"] = [s for s in plan["sounds"] if s["id"] != sound_id]
+    _save(job_dir, plan)
+    return before - len(plan["sounds"])
 
 
 def set_split_face_y(job_dir: Path, value: float) -> None:

@@ -92,6 +92,13 @@ def total_brolls() -> int:
     return clamp_brolls(raw) if raw else DEFAULT_TOTAL_BROLLS
 
 
+def sfx_dir() -> Path:
+    """Where the sound-effect library lives: VIBECROP_SFX_DIR, else <repo>/sfx. On Colab point it at a Drive folder so
+    the sounds survive between sessions."""
+    raw = os.environ.get("VIBECROP_SFX_DIR", "").strip()
+    return Path(raw) if raw else Path(__file__).resolve().parent.parent / "sfx"
+
+
 DEFAULT_SOURCING_WORKERS = 4
 MAX_SOURCING_WORKERS = 8
 

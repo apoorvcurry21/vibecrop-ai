@@ -21,6 +21,7 @@ from src.rendering.ass import TEXT_COLORS, TEXT_FONTS, TEXT_POSITIONS, TEXT_SIZE
 from src.rendering.compose import PIP_POSITIONS
 
 MAX_TRANSCRIPT_CHARS = 9000
+SHORT_WORD = 3  # words this short (or shorter) must match exactly in find_phrase
 FRAMING_PRESETS = {  # (zoom at the start, zoom at the end), always centred
     "zoom_in": (1.0, 1.6), "zoom_out": (1.6, 1.0), "hold": (1.0, 1.0), "hold_zoomed": (1.4, 1.4),
 }
@@ -146,6 +147,8 @@ def plan_view(job: Path) -> dict:
         "captions": {"style": cap["style"], "styles": list(caption_styles.STYLES),
                      "highlights": [{k: e.get(k) for k in ("id", "text", "start", "end", "color", "scale")}
                                     for e in cap["emphasis"]]},
+        "sounds": [{"id": x["id"], "name": x.get("label") or x["lib_id"], "start": x["start"], "volume": x["volume"]}
+                   for x in plan.get("sounds", [])],
         "can_undo": snapshots.can_undo(job),
     }
 
@@ -178,9 +181,16 @@ def find_phrase(words: list[dict], phrase: str, threshold: float = 0.72, limit: 
     if not tokens:
         return []
     norm = [_norm(w.get("word", "")) for w in words]
+    def similar(a: str, b: str) -> float:
+        # A 3-letter word differs from another by one letter all the time ("hai" vs "bhai" is 0.86), so short
+        # words must match exactly; fuzzy matching is for longer names ("koli" / "kohli").
+        if min(len(a), len(b)) <= SHORT_WORD:
+            return 1.0 if a == b else 0.0
+        return difflib.SequenceMatcher(None, a, b).ratio()
+
     hits = []
     for i in range(len(words) - len(tokens) + 1):
-        scores = [difflib.SequenceMatcher(None, tokens[j], norm[i + j]).ratio() for j in range(len(tokens))]
+        scores = [similar(tokens[j], norm[i + j]) for j in range(len(tokens))]
         if min(scores) >= threshold:
             hits.append((sum(scores) / len(scores), i))
     out, used = [], []
@@ -467,4 +477,4 @@ def run_tool(ctx: ToolContext, name: str, args: dict | None) -> dict:
 
 
 # Registered last: these tools need the helpers defined above.
-from src.assistant import caption_tools, media_tools  # noqa: E402,F401
+from src.assistant import caption_tools, media_tools, sound_tools  # noqa: E402,F401

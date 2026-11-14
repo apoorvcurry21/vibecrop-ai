@@ -2,34 +2,12 @@
 Registered in tools.REGISTRY when this module is imported (tools.py does that at its end)."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from src import workflow
-from src.assistant.tools import ToolContext, ToolError, _int, _opt_num, _p, _str, find_phrase, tool
+from src.assistant import phrases
+from src.assistant.tools import ToolContext, _int, _opt_num, _p, _str, tool
 from src.captions import styles
 
-MAX_HITS = 30
 DEFAULT_HIGHLIGHT = {"color": "red", "scale": 1.25}  # what "highlight it" means when the user gave no colour or size
-OCCURRENCES = ("all", "first", "last", "nth")
-
-
-def _searchable_words(job: Path) -> list[list[dict]]:
-    """Word lists to search, best first: the spoken transcript, then any cached caption rewrite (English /
-    Hinglish), so the user can name a word the way it is written on screen."""
-    pools: list[list[dict]] = []
-    try:
-        pools.append(workflow.read_transcript_words(job))
-    except (OSError, ValueError):
-        pass
-    for cache in sorted(job.glob("captions_*.json")):
-        try:
-            chunks = json.loads(cache.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        pools.append([{"word": w["text"], "start": w["start"], "end": w["end"]}
-                      for c in chunks for w in c.get("words", [])])
-    return pools
 
 
 @tool("set_caption_style", "Change how the burned-in captions look. classic = white bold text, spoken word yellow. "
@@ -49,7 +27,7 @@ def _set_caption_style(ctx: ToolContext, args: dict) -> dict:
        "color": _p("string", "colour name (" + ", ".join(styles.NAMED_COLORS) + ") or #RRGGBB"),
        "size": _p("number", "size multiplier 1.0 to 1.8 (1.4 = clearly bigger); leave out to keep the size"),
        "occurrence": _p("string", "which matches: all (default), first, last, or nth (then give `which`)",
-                        OCCURRENCES),
+                        phrases.OCCURRENCES),
        "which": _p("integer", "for occurrence=nth: 1 = the first match")},
       required=("phrase",), mutating=True, label=lambda a: f"Highlighting '{a.get('phrase')}'")
 def _highlight_words(ctx: ToolContext, args: dict) -> dict:
@@ -57,26 +35,8 @@ def _highlight_words(ctx: ToolContext, args: dict) -> dict:
     color, size = args.get("color"), _opt_num(args, "size")
     if (color is None or str(color).strip() == "") and size is None:
         color, size = DEFAULT_HIGHLIGHT["color"], DEFAULT_HIGHLIGHT["scale"]
-    hits: list[dict] = []
-    for pool in _searchable_words(ctx.job):
-        hits = find_phrase(pool, phrase, limit=MAX_HITS)
-        if hits:
-            break
-    if not hits:
-        raise ToolError("Could not find those words. Try find_in_transcript or get_transcript for the exact spelling.")
-    which = args.get("occurrence") or "all"
-    if which not in OCCURRENCES:
-        raise ToolError(f"occurrence must be one of: {', '.join(OCCURRENCES)}.")
-    total = len(hits)
-    if which == "first":
-        hits = hits[:1]
-    elif which == "last":
-        hits = hits[-1:]
-    elif which == "nth":
-        n = _int(args, "which")
-        if not 1 <= n <= total:
-            raise ToolError(f"There are only {total} match(es); 'which' must be between 1 and {total}.")
-        hits = [hits[n - 1]]
+    found = phrases.search(ctx.job, phrase)
+    total, hits = len(found), phrases.select(found, args)
     done = []
     for h in hits:
         entry = workflow.add_emphasis(ctx.job, h["start"], h["end"], color=color, scale=size, text=h["heard_as"])

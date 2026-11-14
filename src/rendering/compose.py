@@ -56,6 +56,42 @@ class Overlay:
     pip: dict | None = None  # picture-in-picture position/size (layout "pip" only)
 
 
+@dataclass
+class Sound:
+    """A sound effect mixed into the audio: `path` plays from `start` seconds on the video timeline."""
+    path: Path
+    start: float
+    volume: float = 1.0
+
+
+AUDIO_RATE = 44100
+
+
+def has_audio(path: Path) -> bool:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type",
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return "audio" in out.stdout
+
+
+def build_audio_graph(sounds: list[Sound], first_input: int, main_has_audio: bool, main_duration: float) -> str:
+    """Mix the speaker's audio with every sound effect: each effect is delayed to its start and scaled by its
+    volume, then all are summed (no automatic level change), with a limiter so a loud overlap cannot clip.
+    The result is as long as the speaker's audio. `first_input` is the ffmpeg input index of the first sound."""
+    fmt = f"aresample={AUDIO_RATE},aformat=channel_layouts=stereo"
+    if main_has_audio:
+        parts = [f"[0:a:0]{fmt}[a0]"]
+    else:  # a silent speaker video still needs a base track to mix the effects onto
+        parts = [f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=0:{max(main_duration, 0.1):.3f}[a0]"]
+    labels = ["[a0]"]
+    for n, snd in enumerate(sounds):
+        ms = max(0, round(snd.start * 1000))
+        parts.append(f"[{first_input + n}:a:0]{fmt},volume={snd.volume:.3f},adelay={ms}|{ms}[s{n}]")
+        labels.append(f"[s{n}]")
+    parts.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0:dropout_transition=0,"
+                 "alimiter=limit=0.97[aout]")
+    return ";".join(parts)
+
+
 def normalize_pip(pip: dict | None) -> dict:
     """Clamp and complete a pip dict; anything unknown falls back to the default."""
     pip = pip or {}
@@ -212,11 +248,13 @@ def _run_ffmpeg(cmd: list[str], cwd: Path | None, total_s: float, progress: Call
 def render(main_video: Path, overlays: list[Overlay], out_path: Path,
            subtitles_file: str | None = None, cwd: Path | None = None,
            face_y: float = DEFAULT_FACE_Y, preset: str = "veryfast", crf: int = 20,
-           progress: Callable[[float], None] | None = None, hw: bool = False) -> Path:
+           progress: Callable[[float], None] | None = None, hw: bool = False,
+           sounds: list[Sound] | None = None) -> Path:
     """Render the final video. Only the main video's audio is used: B-roll audio is never mapped.
 
     `subtitles_file` must be relative to `cwd` (avoids Windows drive-letter escaping in filters).
     `progress(fraction)` is called while ffmpeg runs; `hw=True` allows the GPU encoder (final export only).
+    `sounds` are sound effects mixed into the speaker's audio (see build_audio_graph).
     """
     ffmpeg = require_binary("ffmpeg")
     for ov in overlays:  # zoom/pan needs the clip's real size
@@ -226,9 +264,17 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
     for ov in overlays:
         # -t trims the clip to its slot length; -an drops any audio the source might carry.
         cmd += ["-an", "-t", f"{ov.end - ov.start:.3f}", "-i", str(ov.path)]
+    graph = build_filtergraph(overlays, subtitles_file, face_y)
+    audio_map = ["-map", "0:a:0?"]
+    sounds = [snd for snd in (sounds or []) if snd.path.is_file()]
+    if sounds:
+        for snd in sounds:
+            cmd += ["-i", str(snd.path)]
+        graph += ";" + build_audio_graph(sounds, len(overlays) + 1, has_audio(main_video), probe_duration(main_video))
+        audio_map = ["-map", "[aout]"]
     cmd += [
-        "-filter_complex", build_filtergraph(overlays, subtitles_file, face_y),
-        "-map", "[v]", "-map", "0:a:0?",
+        "-filter_complex", graph,
+        "-map", "[v]", *audio_map,
         *video_encoder_args(preset, crf, hw),
         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
         str(out_path),

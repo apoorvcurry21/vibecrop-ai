@@ -28,3 +28,7 @@ output/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local sound-effect library and model files (copyrighted audio / downloaded models: never commit)
+/sfx/
+/models/

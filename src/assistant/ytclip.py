@@ -89,18 +89,27 @@ def video_info(url: str) -> dict:
 
 
 def find_window(info: dict, about: str, length: float, client: Any = None, models: list[str] | None = None,
-                sleep=time.sleep) -> tuple[float, str]:
-    """Ask Gemini to watch the video and return (start second, why) of the best `length`-second moment."""
+                sleep=time.sleep, sound: bool = False) -> tuple[float, str]:
+    """Ask Gemini to watch the video and return (start second, why) of the best `length`-second moment.
+    With `sound=True` it listens for a sound effect instead of looking for a scene."""
     from google.genai import types
 
     if info["duration"] > MAX_AUTO_SEARCH_S:
         raise YtError("That video is very long. Tell me roughly when the moment happens (for example 'around "
                       "12:30') and I'll cut from there.")
-    prompt = (f"Watch this video. Find the single best moment, {length:g} seconds long, that shows: {about}\n"
-              f"The video is {info['duration']:.0f} seconds long. Reply with `start` (seconds from the beginning "
-              f"where the moment begins; the whole {length:g} seconds must stay inside the video and show it, "
-              "not an intro, logo, title card or still image) and `reason` (one short sentence about what is on "
-              "screen).")
+    if sound:
+        prompt = (f"Listen to this video. Find the single best moment, {length:g} seconds long, where you can "
+                  f"clearly hear this sound: {about}\n"
+                  f"The video is {info['duration']:.0f} seconds long. Reply with `start` (seconds from the "
+                  f"beginning where the sound begins, a little before it so its first instant is not cut; the whole "
+                  f"{length:g} seconds must stay inside the video, and prefer a moment where the sound is clean, "
+                  "with no talking or music over it) and `reason` (one short sentence).")
+    else:
+        prompt = (f"Watch this video. Find the single best moment, {length:g} seconds long, that shows: {about}\n"
+                  f"The video is {info['duration']:.0f} seconds long. Reply with `start` (seconds from the "
+                  f"beginning where the moment begins; the whole {length:g} seconds must stay inside the video and "
+                  "show it, not an intro, logo, title card or still image) and `reason` (one short sentence about "
+                  "what is on screen).")
     history = [types.Content(role="user", parts=[types.Part(file_data=types.FileData(file_uri=info["url"])),
                                                  types.Part(text=prompt)])]
     try:

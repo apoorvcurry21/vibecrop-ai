@@ -144,6 +144,38 @@ English and Hinglish caption languages. The same works from the chat: *"caption 
 (`captions.style`, `captions.emphasis`), so they are part of Undo. Changing the style never costs another Gemini
 call (the cached caption text is re-split into shorter lines instead).
 
+### Sound effects
+
+A library of about 50 meme and utility sounds (fah, vine boom, bruh, airhorn, sad violin, "bhai kya kar raha hai
+tu", whoosh, ding...). The audio is **never committed** (the sounds are copyrighted and the repo is public): you
+download it once to your own PC.
+
+```
+python scripts/build_sfx_library.py            # fetches what is missing into ./sfx (about 4 MB, a few minutes)
+python scripts/build_sfx_library.py --list     # what is in the catalog and what you already have
+python scripts/build_sfx_library.py --only fah --force   # redo one sound
+```
+
+The list is `src/sfx/catalog.py` (names, Hinglish aliases, the YouTube search text). If a search picked the wrong
+video, change that entry's `query` and run the script again with `--only <id> --force`. Each sound is trimmed of
+silence, capped at 8 s and peak-normalised, so they all play at a similar level. The folder is `VIBECROP_SFX_DIR`
+(default `./sfx`; on Colab point it at a Drive folder so it survives between sessions).
+
+Use them from the chat (English or Hinglish):
+
+- *"jab bhi main 'bhai' bolun tab fah daal dena"*: finds every place the word is spoken (exact for short words,
+  spelling-tolerant for names) and tells you how many it found. *"only the first one"*, *"right after the word"*,
+  *"0.2 s earlier"* and *"louder"* work too.
+- *"5 second par sad violin"*: at a time.
+- A sound that is not in the library (*"nokia ringtone daal do"*) is searched on YouTube, saved into the library and
+  placed. A **YouTube link** works too: give the time of the sound (`0:42`) or describe it and Gemini listens to the
+  video and picks the moment. Only the needed seconds of audio are downloaded.
+
+The **Sound effects** panel on the review screen lists every placed sound: listen to it, change its time or
+volume, delete it, or add one from the library. Sounds are mixed into the **exported** video (the speaker's audio is
+kept, effects are added on top with a limiter against clipping); the previews stay silent. The default volume is
+0.8 (a bit under the voice); 1 = as recorded, up to 2.
+
 ### AI assistant (chat)
 
 Press the round **💬 button** (bottom right) on the review screen: a chat panel opens on the right and the page
@@ -160,6 +192,7 @@ buttons cannot do:
 - *"generate a picture of ..."*: Gemini image generation (see the note below).
 - **Text on the video**: *"big yellow GOAT at the top from 7 s to 9 s"* (position, size, colour, font).
 - **Captions**: change the style and highlight words (see above).
+- **Sound effects**: *"fah when I say 'bhai'"* (see above).
 - When you add a picture or clip without saying how it should look, it shows **illustrated examples** of the three
   layouts to tap: *full screen*, *split* (picture on top, you below) or *small box* (picture-in-picture, with a
   position and size).
@@ -200,7 +233,9 @@ src/
   rendering/       # Phase 3-5 (compose.py = layouts, framing.py = zoom/pan maths, preview.py = editor previews,
                    #           ass.py = caption/credit/text subtitles)
   captions/        # chunks.py, rewrite.py, styles.py (the 3 caption presets + word emphasis)
-  assistant/       # chat: agent.py (Gemini tool-calling loop), tools.py + media_tools.py + caption_tools.py (what it can do),
+  sfx/            # catalog.py (what to download), library.py (index + fuzzy name lookup), fetch.py (YouTube / by name)
+  assistant/       # chat: agent.py (Gemini tool-calling loop), tools.py + media_tools.py + caption_tools.py + sound_tools.py (what it can do),
                    #       snapshots.py (undo), ytclip.py / media.py / fetch.py (clips and pictures), ui.py (panel)
 scripts/make_layout_mockups.py   # redraws the layout example pictures shown in the chat
+scripts/build_sfx_library.py     # downloads the sound-effect library once (never committed)
 ```

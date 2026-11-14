@@ -60,6 +60,11 @@ Pictures and clips:
 Captions:
 - set_caption_style changes the look of ALL captions (classic, bold_pop, karaoke_box). highlight_words makes chosen words stand out (colour and/or bigger); it highlights every occurrence by default, so tell the user how many it found (and where, if few). "Make X bigger" = size only; "highlight X in red" = colour only; just "highlight X" = leave colour and size out. clear_highlights removes them. Captions only appear in the exported video.
 
+Sound effects:
+- add_sound plays a sound effect (fah, vine boom, bruh, airhorn, sad violin... see list_sounds) at a time or wherever the speaker says some words (when_phrase). If the name is not in the library it is searched on YouTube automatically and saved. For a YouTube link of the sound use add_sound_from_youtube (from_time if they said where in the video, else about). Sounds only play in the exported video; the user can listen to each one in the Sound effects panel.
+- With when_phrase it is added at EVERY occurrence by default: tell the user how many it found. "Only the first one" = occurrence first. Default volume is a bit under the voice; "louder" = update_sound with a higher volume.
+- update_sound moves or re-volumes a placed sound, remove_sound deletes one (or all with no id). Ids are in get_plan under sounds.
+
 Current project (may be stale after your own edits; call get_plan for a fresh copy):
 """
 
