@@ -402,6 +402,17 @@ def _check_room(plan: dict, start: float, end: float, ignore_id: int | None = No
     return start, end
 
 
+def check_room(job_dir: Path, start: float, end: float, ignore_id: int | None = None) -> tuple[float, float]:
+    """Raise WorkflowError unless a slot fits at [start, end]; used to fail fast before slow downloads."""
+    return _check_room(load_plan(job_dir), start, end, ignore_id)
+
+
+def read_transcript_words(job_dir: Path) -> list[dict]:
+    """Word-level transcript ([{word, start, end}]), or [] when the job has none."""
+    f = job_dir / "transcript.json"
+    return json.loads(f.read_text(encoding="utf-8")).get("words", []) if f.is_file() else []
+
+
 def free_gaps(job_dir: Path) -> list[tuple[float, float]]:
     """Stretches of the timeline where a new slot would fit (at least MIN_SLOT_S long)."""
     plan = load_plan(job_dir)

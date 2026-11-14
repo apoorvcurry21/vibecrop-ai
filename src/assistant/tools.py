@@ -457,3 +457,7 @@ def run_tool(ctx: ToolContext, name: str, args: dict | None) -> dict:
     if snapped:  # the call failed: put everything back exactly as it was
         snapshots.undo(ctx.job)
     return {"error": message}
+
+
+# Registered last: these tools need the helpers defined above.
+from src.assistant import media_tools  # noqa: E402,F401

@@ -32,19 +32,28 @@ def _is_dark() -> bool:
         return False
 
 
-def _render_cards(job: Path, cards: list[dict]) -> None:
-    for card in cards or []:
+def _render_cards(job: Path, cards: list[dict], key: str = "live") -> None:
+    """Pictures the assistant shows: one generated/attached image, or a row of search results with a Use button."""
+    for ci, card in enumerate(cards or []):
         if card.get("type") == "image" and (job / card.get("path", "x")).is_file():
             st.image(str(job / card["path"]), caption=card.get("caption"), width=220)
+        elif card.get("type") == "choices":
+            items = [i for i in card.get("items", []) if (job / i.get("path", "x")).is_file()]
+            for row in range(0, len(items), 3):
+                for col, item in zip(st.columns(3), items[row:row + 3]):
+                    with col:
+                        st.image(str(job / item["path"]), caption=item.get("caption"), width="stretch")
+                        col.button("Use this", key=f"use_{key}_{ci}_{item['id']}", on_click=_suggest,
+                                   args=(f"Use {item['id']}",), width="stretch")
 
 
-def _render_message(job: Path, m: dict) -> None:
+def _render_message(job: Path, m: dict, key: str = "live") -> None:
     with st.chat_message(m["role"]):
         for f in m.get("files") or []:
             st.caption(f"📎 {f.get('name', 'file')}")
         if m.get("text"):
             st.markdown(m["text"])
-        _render_cards(job, m.get("cards"))
+        _render_cards(job, m.get("cards"), key)
 
 
 def _save_files(job: Path, files: list) -> tuple[list[Attachment], list[str]]:
@@ -90,7 +99,7 @@ def _run_turn(job: Path, box, text: str, attachments: list[Attachment], problems
             status.empty()
             if state["error"]:
                 st.error(state["error"])
-            _render_cards(job, state["cards"])
+            _render_cards(job, state["cards"], key="new")
     reply = (streamed if isinstance(streamed, str) else state["final"]) or state["error"] or ""
     store.append(job, "assistant", reply.strip(), cards=state["cards"])
     return state["changed"]
@@ -117,9 +126,9 @@ def chat_panel(job_str: str) -> None:
                        "layouts, add text, and more. You can attach pictures too.")
             cols = st.columns(2)
             for i, s in enumerate(SUGGESTIONS):
-                cols[i % 2].button(s, key=f"chat_s{i}", on_click=_suggest, args=(s,), use_container_width=True)
-        for m in messages[-VISIBLE_MESSAGES:]:
-            _render_message(job, m)
+                cols[i % 2].button(s, key=f"chat_s{i}", on_click=_suggest, args=(s,), width="stretch")
+        for n, m in enumerate(messages[-VISIBLE_MESSAGES:]):
+            _render_message(job, m, key=f"h{n}")
 
     prompt = st.chat_input("Ask me to edit your video...", key="chat_input", accept_file="multiple",
                            file_type=FILE_TYPES)
