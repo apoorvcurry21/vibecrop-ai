@@ -59,6 +59,17 @@ def gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL
 
 
+DEFAULT_CHAT_MODEL = "gemini-3.1-flash-lite"  # measured ~3 s per round vs 10-20 s for gemini-3.5-flash
+
+
+def chat_model_chain() -> list[str]:
+    """Models for the chat assistant, in order. The chat favours speed, so it starts with the light model
+    (GEMINI_CHAT_MODEL in .env) and only then tries the planner's model and its fallbacks."""
+    first = os.environ.get("GEMINI_CHAT_MODEL", "").strip() or DEFAULT_CHAT_MODEL
+    rest = [gemini_model(), *gemini_fallback_models()]
+    return [first] + [m for i, m in enumerate(rest) if m != first and m not in rest[:i]]
+
+
 def gemini_fallback_models() -> list[str]:
     """Models tried in order if the primary keeps failing (overload, 404). Comma-separated in .env."""
     raw = os.environ.get("GEMINI_FALLBACK_MODELS")

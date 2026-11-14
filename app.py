@@ -327,7 +327,7 @@ def run_analysis(draft: Path) -> None:
 if job is None:
     st.subheader("1. Choose your video")
     up = st.file_uploader("Upload a raw video (about 1-2 minutes)", type=["mp4", "mov", "mkv", "m4v"])
-    local = st.text_input("...or the path of a video already on this PC", placeholder=r"D:ids\my_video.mp4")
+    local = st.text_input("...or the path of a video already on this PC", placeholder=r"D:\vids\my_video.mp4")
     local_path = local.strip().strip('"')
     sig = ("upload", up.name, up.size) if up else (("path", local_path) if local_path else None)
 
@@ -417,7 +417,7 @@ if workflow.needs_pipeline(job):
 # ---------------------------------------------------------------- step 3: review
 plan = workflow.load_plan(job)
 items = sorted(plan["items"], key=lambda i: i["timestamp_start"])  # timeline order
-ready =sum(1 for i in items if (i.get("asset") or {}).get("status") == "ok" and i.get("enabled") is not False)
+ready = sum(1 for i in items if (i.get("asset") or {}).get("status") == "ok" and i.get("enabled") is not False)
 final = job / "final.mp4"
 
 st.subheader("3. Review the plan")
@@ -533,3 +533,20 @@ else:
 if final.is_file():
     st.success(f"Final video: {final}")
     st.video(str(final))
+
+
+# ---------------------------------------------------------------- AI assistant (floating button -> right-hand panel)
+def _open_chat() -> None:
+    st.session_state["chat_open"] = True
+
+
+if st.session_state.get("chat_open"):
+    from src.assistant import ui as chat_ui  # imported only once the panel is opened: the closed state costs nothing
+
+    chat_ui.mount(job)
+else:
+    from src.assistant.style import FAB_CSS
+
+    st.markdown(FAB_CSS, unsafe_allow_html=True)
+    with st.container(key="chat_fab"):
+        st.button("💬", key="chat_open_btn", on_click=_open_chat, help="Open the AI assistant")
