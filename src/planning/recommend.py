@@ -12,7 +12,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, ValidationError
 
 from src import config
-from src.gemini_client import GeminiError, content, generate_with_fallback, make_client, model_chain
+from src.gemini_client import GeminiError, content, generate_with_fallback, make_client
 from src.planning.prompt import VIDEO_MAX_S, VIDEO_MIN_S, feasible_max
 
 SECONDS_PER_BROLL = 8.0  # the formula fallback, and the guidance given to Gemini
@@ -59,8 +59,10 @@ def recommend_count(transcript: dict, client: Any = None, models: list[str] | No
     (the reason then says so)."""
     duration = float(transcript.get("video_duration") or transcript.get("duration") or 0.0)
     try:
-        client = client or make_client()
-        text, _ = generate_with_fallback(client, models or model_chain(), [content("user", _user_prompt(transcript, duration))],
+        client = client or make_client(config.CHAT_TIMEOUT_MS)
+        # A count is a small decision: the light model answers in ~3 s (the planner's model takes 10-60 s) and gave
+        # the same answer in testing; the planner's model is still the fallback.
+        text, _ = generate_with_fallback(client, models or config.chat_model_chain(), [content("user", _user_prompt(transcript, duration))],
                                          sleep, SYSTEM_PROMPT, CountSuggestion)
         parsed = CountSuggestion.model_validate(json.loads(text))
         return {"count": clamp_count(duration, parsed.count), "reason": " ".join(parsed.reason.split()),

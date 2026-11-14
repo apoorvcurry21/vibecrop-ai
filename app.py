@@ -486,9 +486,38 @@ def draft_job() -> Path | None:
     return Path(raw) if raw and Path(raw).is_dir() else None
 
 
+def mmss(seconds: float) -> str:
+    m, s = divmod(int(round(seconds)), 60)
+    return f"{m}:{s:02d}"
+
+
+def cleanup_summary(job: Path) -> None:
+    """What the talking-head cleanup did: the lengths, what was cut and why, and anything that was skipped."""
+    report = workflow.read_cleanup_report(job)
+    if not report:
+        return
+    st.success(f"Cleaned: {mmss(report['original_duration'])} to {mmss(report['clean_duration'])} "
+               f"({report['removed_pauses_s']:.1f} s of long pauses and {report['removed_retakes_s']:.1f} s of "
+               f"retakes and stutters removed, noise removed with {report['denoise']}).")
+    for w in report.get("warnings", []):
+        st.warning(w)
+    with st.expander(f"What was cut ({len(report.get('retakes', []))} retakes / stutters, "
+                     f"{report.get('pauses_cut', 0)} long pauses)"):
+        for r in report.get("retakes", []):
+            st.markdown(f"- **{r['reason'].replace('_', ' ')}** at {r['start']:.1f} s (original video): "
+                        f"\"{r['text']}\"")
+        if not report.get("retakes"):
+            st.caption("No retakes or stutters were found.")
+        st.caption("Times refer to the original recording. Taking the cleanup off (the checkbox above) goes back to "
+                   "the original video. Steps took: " + ", ".join(f"{k} {v:g} s" for k, v in report["seconds"].items()))
+
+
 def run_analysis(draft: Path) -> None:
-    """Transcribe the video and ask Gemini how many B-rolls suit it; preset the count slider with the answer."""
-    with st.status("Analysing your video (transcribing, then asking the AI how many B-rolls suit it)...",
+    """Transcribe the video and ask Gemini how many B-rolls suit it; preset the count slider with the answer.
+    With the cleanup ticked it first denoises the audio and cuts pauses and retakes (a bit longer)."""
+    cleaning = bool(workflow.read_job_meta(draft).get("clean_talking_head"))
+    with st.status("Cleaning the recording, then analysing it..." if cleaning else
+                   "Analysing your video (transcribing, then asking the AI how many B-rolls suit it)...",
                    expanded=True) as status:
         try:
             suggestion = workflow.analyse(draft, log=lambda m: status.write(m))
@@ -503,6 +532,11 @@ def run_analysis(draft: Path) -> None:
 
 if job is None:
     st.subheader("1. Choose your video")
+    clean = st.checkbox(
+        "Clean the talking-head recording (remove background noise, long pauses and retakes)", key="clean_th",
+        help="For a raw take straight from the camera. It removes noise, cuts pauses longer than 0.6 s and the "
+             "failed attempts / stutters, evens out the voice, then works on the cleaned video. Adds about 10-30 s. "
+             "The original is kept; untick this to go back to it.")
     up = st.file_uploader("Upload a raw video (about 1-2 minutes)", type=["mp4", "mov", "mkv", "m4v"])
     local = st.text_input("...or the path of a video already on this PC", placeholder=r"D:\vids\my_video.mp4")
     local_path = local.strip().strip('"')
@@ -517,9 +551,9 @@ if job is None:
     if sig and draft is None and st.session_state.get("failed_sig") != sig:
         try:
             if up:
-                draft = workflow.create_job_from_upload(up.name, up.getbuffer(), spoken)
+                draft = workflow.create_job_from_upload(up.name, up.getbuffer(), spoken, clean=clean)
             else:
-                draft = workflow.create_job(local_path, spoken)
+                draft = workflow.create_job(local_path, spoken, clean=clean)
             st.session_state.update(draft_job=str(draft), draft_sig=sig)
             st.session_state.pop("failed_sig", None)
             run_analysis(draft)
@@ -529,11 +563,16 @@ if job is None:
     elif draft and workflow.read_job_meta(draft).get("language") != spoken:  # language changed: re-transcribe
         workflow.set_language(draft, spoken)
         run_analysis(draft)
+    elif draft and bool(workflow.read_job_meta(draft).get("clean_talking_head")) != clean:  # cleanup toggled
+        workflow.set_cleanup(draft, clean)
+        run_analysis(draft)
     elif draft and st.session_state.get("analysis_failed"):
         if st.button("Retry analysis"):
             run_analysis(draft)
 
     draft_meta = workflow.read_job_meta(draft) if draft else {}
+    if draft and draft_meta.get("cleaned"):
+        cleanup_summary(draft)
     st.subheader("2. Pick a video style")
     style = st.radio("Video style", list(STYLES), format_func=STYLE_LABELS.get, key="style",
                      label_visibility="collapsed")
@@ -618,6 +657,10 @@ with st.expander("Change the number of B-rolls or add notes, then re-plan"):
 for message in st.session_state.pop("flash", []):
     st.warning(message)
 
+if workflow.read_cleanup_report(job):
+    with st.expander("Talking-head cleanup report"):
+        cleanup_summary(job)
+
 with st.expander("Video style (overlay, split or hybrid)"):
     cur_style = meta.get("style", "overlay")
     new_style = st.radio("Style", list(STYLES), index=STYLES.index(cur_style) if cur_style in STYLES else 0,
@@ -692,7 +735,11 @@ with st.expander(f"Sound effects ({len(plan.get('sounds', []))})"):
 
 # ---------------------------------------------------------------- step 4: render
 st.subheader("4. Export")
-if workflow.source_video_path(job) is None:
+if workflow.source_video_path(job) is None and meta.get("cleaned"):
+    st.warning("This job used the talking-head cleanup, and the cleaned video was deleted after the render to save "
+               "space. The plan only fits the cleaned video, so it cannot be rendered again from the original. "
+               "Start a new video (untick 'Delete temporary clips after render' to be able to render again).")
+elif workflow.source_video_path(job) is None:
     path = st.text_input("The original video file for this job was not found. Enter its path:",
                          placeholder=r"D:\vids\my_video.mp4")
     if path.strip() and Path(path.strip().strip('"')).is_file():

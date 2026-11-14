@@ -144,6 +144,37 @@ English and Hinglish caption languages. The same works from the chat: *"caption 
 (`captions.style`, `captions.emphasis`), so they are part of Undo. Changing the style never costs another Gemini
 call (the cached caption text is re-split into shorter lines instead).
 
+### Talking-head cleanup
+
+Tick **Clean the talking-head recording** above the uploader (for a raw take straight from the camera). Then, before
+anything else happens:
+
+1. The audio is extracted and **background noise is removed** with ffmpeg's `arnndn` (RNNoise, runs on the CPU). It
+   needs a 300 KB model file that is downloaded once into `./models` (`VIBECROP_MODELS_DIR`; never committed). If that
+   download is impossible a model-free filter (`afftdn`) is used and the report says so.
+2. The **cleaned** audio is transcribed with Groq Whisper (cleaner audio, better words and timestamps).
+3. **Long pauses** (0.6 s or more) are found with `silencedetect` and shortened: 0.18 s is kept on each side so speech
+   keeps a natural breath. A cut never reaches into a word.
+4. **Stutters and retakes**: Groq proposes cuts from the transcript (`GROQ_LLM_MODEL`, default `openai/gpt-oss-120b`),
+   simple code finds exact repeats and restarted sentences too, and **Gemini has to approve every cut** (it sees the
+   words before, the words to remove and the words after). Nothing is cut without that second check; if Groq or
+   Gemini is unavailable the step is skipped with a warning. For a stutter the last repetition is kept ("you you
+   you" becomes "you").
+5. **One ffmpeg pass** cuts everything, then polishes the voice (rumble filter, a gentle EQ, a compressor, loudness
+   about -16 LUFS; the values are constants in `src/talkinghead/voice.py`) and writes `source_clean.mp4`.
+6. The transcript's timestamps are shifted onto the shorter timeline (no second transcription), and the plan,
+   B-roll, captions, chat and export all work on the cleaned video.
+
+A **report** shows the lengths before and after and what was cut (and why); the checkbox can be unticked to go back
+to the original. Measured on a 24 s synthetic test recording with real Groq and Gemini: 24.3 s became 15.7 s in
+about 10 s (denoise 0.5 s, transcription 1.2 s, retakes 3-4 s, cut and encode 4 s); the background noise floor
+dropped from -36 dB to -55 dB and the loudness came out at -16.1 LUFS.
+
+Good to know: Groq's free-tier upload limit applies to the raw recording (`MAX_VIDEO_SECONDS`, default 180 s; raise it
+for longer takes). An intentional doubled word ("really really") can be taken for a stutter. The cleaned video is
+deleted after the render with the other temporary files, so a cleaned job cannot be rendered again afterwards
+(untick *Delete temporary clips after render* to keep it).
+
 ### Sound effects
 
 A library of about 50 meme and utility sounds (fah, vine boom, bruh, airhorn, sad violin, "bhai kya kar raha hai
@@ -233,6 +264,7 @@ src/
   rendering/       # Phase 3-5 (compose.py = layouts, framing.py = zoom/pan maths, preview.py = editor previews,
                    #           ass.py = caption/credit/text subtitles)
   captions/        # chunks.py, rewrite.py, styles.py (the 3 caption presets + word emphasis)
+  talkinghead/     # pipeline.py (the cleanup), denoise.py, silence.py, retakes.py, voice.py
   sfx/            # catalog.py (what to download), library.py (index + fuzzy name lookup), fetch.py (YouTube / by name)
   assistant/       # chat: agent.py (Gemini tool-calling loop), tools.py + media_tools.py + caption_tools.py + sound_tools.py (what it can do),
                    #       snapshots.py (undo), ytclip.py / media.py / fetch.py (clips and pictures), ui.py (panel)

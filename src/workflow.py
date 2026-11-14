@@ -13,6 +13,7 @@ from src.cleanup import purge_job_temp
 from src.planning import pipeline as planning
 from src.planning import recommend
 from src.sfx import library as sfx_library
+from src.talkinghead import pipeline as talkinghead
 from src.planning.layouts import LAYOUTS, STYLES, assign_layouts
 from src.planning.prompt import INTRO_SAFE_S
 from src.rendering import framing as framing_mod
@@ -72,11 +73,12 @@ def source_video_path(job_dir: Path) -> Path | None:
 
 def create_job(video_path: str | Path, language: str, copy_into_job: bool = False,
                root: Path | None = None, total: int | None = None, notes: str = "",
-               style: str = "overlay") -> Path:
+               style: str = "overlay", clean: bool = False) -> Path:
     """Create a job folder for a video. `copy_into_job=True` is for uploads (the copy is purged on cleanup).
 
     `total` (1-15) is how many B-rolls to plan; `notes` are optional creator hints for the AI;
-    `style` is the video style: "overlay", "split" or "hybrid" (see planning/layouts.py)."""
+    `style` is the video style: "overlay", "split" or "hybrid" (see planning/layouts.py).
+    `clean=True` runs the talking-head cleanup (noise, pauses, retakes) when the job is analysed."""
     if style not in STYLES:
         raise WorkflowError(f"Unknown video style '{style}'. Choose one of: {', '.join(STYLES)}.")
     video_path = Path(video_path)
@@ -87,19 +89,19 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
     if copy_into_job:
         source = job / f"source{video_path.suffix.lower() or '.mp4'}"
         shutil.copyfile(video_path, source)
-    _init_job_meta(job, source, video_path.name, language, total, notes, style)
+    _init_job_meta(job, source, video_path.name, language, total, notes, style, clean)
     return job
 
 
 def _init_job_meta(job: Path, source: Path, source_name: str, language: str, total: int | None, notes: str,
-                   style: str) -> None:
+                   style: str, clean: bool = False) -> None:
     write_job_meta(job, source_video=str(source), language=language, source_name=source_name,
                    total_brolls=config.clamp_brolls(config.total_brolls() if total is None else total),
-                   notes=" ".join((notes or "").split()), style=style)
+                   notes=" ".join((notes or "").split()), style=style, clean_talking_head=bool(clean))
 
 
 def create_job_from_upload(filename: str, data, language: str, root: Path | None = None, total: int | None = None,
-                           notes: str = "", style: str = "overlay") -> Path:
+                           notes: str = "", style: str = "overlay", clean: bool = False) -> Path:
     """Like `create_job(copy_into_job=True)` for a browser upload, but the bytes go straight into the job folder.
     `data` is bytes or a memoryview (e.g. `UploadedFile.getbuffer()`): no staging file, one write instead of two."""
     if style not in STYLES:
@@ -108,7 +110,7 @@ def create_job_from_upload(filename: str, data, language: str, root: Path | None
     job = config.new_job_dir(name, root=jobs_root(root).parent)
     source = job / f"source{Path(name).suffix.lower() or '.mp4'}"
     source.write_bytes(data)
-    _init_job_meta(job, source, name, language, total, notes, style)
+    _init_job_meta(job, source, name, language, total, notes, style, clean)
     return job
 
 
@@ -119,7 +121,14 @@ def analyse(job_dir: Path, log: Callable[[str], None] = print) -> dict:
     video = source_video_path(job_dir)
     if video is None:
         raise WorkflowError("The source video for this job is missing.")
-    if not (job_dir / "transcript.json").is_file():
+    if meta.get("clean_talking_head") and not meta.get("cleaned"):
+        log("Cleaning the talking-head recording (noise, pauses, retakes)...")
+        with perf.stage(job_dir, "cleanup"):
+            result = talkinghead.clean(job_dir, video, meta["language"], log=log)
+        (job_dir / "transcript.json").write_text(json.dumps(result["transcript"], ensure_ascii=False, indent=2),
+                                                 encoding="utf-8")
+        write_job_meta(job_dir, original_video=str(video), source_video=str(result["video"]), cleaned=True)
+    elif not (job_dir / "transcript.json").is_file():
         log("Transcribing audio with Groq Whisper...")
         with perf.stage(job_dir, "transcribe"):
             transcription.run(video, meta["language"], job_dir=job_dir)
@@ -138,6 +147,11 @@ def set_language(job_dir: Path, language: str) -> None:
     if read_job_meta(job_dir).get("language") == language:
         return
     write_job_meta(job_dir, language=language)
+    _reset_derived(job_dir)
+
+
+def _reset_derived(job_dir: Path) -> None:
+    """Forget everything computed from the transcript (plan, clips, caption caches, the AI's suggestion)."""
     for name in ("transcript.json", "plan.json", "final.mp4"):
         (job_dir / name).unlink(missing_ok=True)
     for cache in job_dir.glob("captions_*.json"):
@@ -147,6 +161,29 @@ def set_language(job_dir: Path, language: str) -> None:
     for key in ("suggested_brolls", "suggested_reason", "suggested_source"):
         meta.pop(key, None)
     (job_dir / "job.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def set_cleanup(job_dir: Path, enabled: bool) -> None:
+    """Turn the talking-head cleanup on or off for a job that was only analysed. Turning it off after it ran goes
+    back to the original video; either way the next `analyse` redoes the transcript."""
+    meta = read_job_meta(job_dir)
+    if bool(meta.get("clean_talking_head")) == bool(enabled):
+        return
+    updates: dict = {"clean_talking_head": bool(enabled), "cleaned": False}
+    if meta.get("cleaned") and meta.get("original_video"):
+        updates["source_video"] = meta["original_video"]
+    write_job_meta(job_dir, **updates)
+    (job_dir / "source_clean.mp4").unlink(missing_ok=True)
+    (job_dir / "cleanup_report.json").unlink(missing_ok=True)
+    _reset_derived(job_dir)
+
+
+def read_cleanup_report(job_dir: Path) -> dict | None:
+    f = job_dir / "cleanup_report.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
+    except (OSError, ValueError):
+        return None
 
 
 def discard_draft(job_dir: Path | None) -> None:
