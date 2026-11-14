@@ -22,6 +22,7 @@ from src.sourcing.youtube import _probe as probe_clip
 from src.transcription import pipeline as transcription
 
 MIN_SLOT_S = 1.5  # shortest slot the editor allows (the planner itself aims for 3-5 s)
+MIN_FREE_S = 0.3  # the chat is not bound by the editor's rules; this only stops a zero-length slot
 EDIT_GAP_S = 0.1  # smallest gap the editor allows between two slots
 # What travels with a clip when two slots swap places. Timing, layout and removed-state stay with the slot.
 SWAP_FIELDS = ("asset", "search_query", "alternative_queries", "spoken_text", "english_meaning", "reasoning",
@@ -255,20 +256,29 @@ def timing_limits(job_dir: Path, item_id: int) -> dict:
     return {"min_start": round(lo, 2), "max_end": round(hi, 2), "max_len": _clip_length(job_dir, item)}
 
 
-def set_timing(job_dir: Path, item_id: int, start: float, end: float, refetch: bool = False) -> dict:
+def set_timing(job_dir: Path, item_id: int, start: float, end: float, refetch: bool = False,
+               free: bool = False) -> dict:
     """Move/resize a slot on the timeline. It cannot cross or touch its neighbours, so slot order (and with it
     the ids and clip file names) never changes. A slot cannot be longer than its downloaded clip unless
-    `refetch=True`, which downloads a fresh (possibly different) clip for the new length."""
-    start, end = round(float(start), 2), round(float(end), 2)
-    if end - start < MIN_SLOT_S - 1e-6:
-        raise WorkflowError(f"A slot must last at least {MIN_SLOT_S:g} seconds.")
-    lim = timing_limits(job_dir, item_id)
-    if start < lim["min_start"] - 1e-6:
-        raise WorkflowError(f"This slot cannot start before {lim['min_start']:g}s "
-                            "(the speaker owns the opening, and slots can't overlap).")
-    if end > lim["max_end"] + 1e-6:
-        raise WorkflowError(f"This slot cannot end after {lim['max_end']:g}s "
-                            "(the video ends there, or the next slot begins).")
+    `refetch=True`, which downloads a fresh (possibly different) clip for the new length.
+
+    `free=True` (the chat assistant) drops the editor's rules: any start from 0 s, short slots, and overlapping
+    other slots are all fine (the later slot is drawn on top). Only the video's length and the clip's length bind."""
+    if free:
+        plan = load_plan(job_dir)
+        start, end = _check_free(plan, start, end)
+        lim = {"max_len": _clip_length(job_dir, _item(plan, item_id))}
+    else:
+        start, end = round(float(start), 2), round(float(end), 2)
+        if end - start < MIN_SLOT_S - 1e-6:
+            raise WorkflowError(f"A slot must last at least {MIN_SLOT_S:g} seconds.")
+        lim = timing_limits(job_dir, item_id)
+        if start < lim["min_start"] - 1e-6:
+            raise WorkflowError(f"This slot cannot start before {lim['min_start']:g}s "
+                                "(the speaker owns the opening, and slots can't overlap).")
+        if end > lim["max_end"] + 1e-6:
+            raise WorkflowError(f"This slot cannot end after {lim['max_end']:g}s "
+                                "(the video ends there, or the next slot begins).")
     if not refetch and lim["max_len"] is not None and end - start > lim["max_len"] + 0.05:
         raise WorkflowError(f"The downloaded clip is only {lim['max_len']:.1f}s long. Shorten the slot, "
                             "or fetch a longer clip (this may pick a different video).")
@@ -277,6 +287,8 @@ def set_timing(job_dir: Path, item_id: int, start: float, end: float, refetch: b
     item["timestamp_start"], item["timestamp_end"] = start, end
     if refetch:
         _resource(job_dir, item, set())
+    if free:
+        plan["items"].sort(key=lambda i: i["timestamp_start"])  # keep the list in timeline order
     _save(job_dir, plan)
     return item
 
@@ -381,8 +393,35 @@ def apply_style(job_dir: Path, style: str) -> None:
 
 
 # ----------------------------------------------------------------------------- adding / replacing slots (chat)
-def _check_room(plan: dict, start: float, end: float, ignore_id: int | None = None) -> tuple[float, float]:
+def _check_free(plan: dict, start: float, end: float) -> tuple[float, float]:
+    """The chat's only rules: stay inside the video (a range running past the end is trimmed to it) and last at
+    least a moment. Starting at 0 s and overlapping other slots are fine."""
+    start, end = max(round(float(start), 2), 0.0), round(float(end), 2)
+    duration = float(plan.get("video_duration") or 0.0)
+    if duration:
+        start, end = min(start, duration), min(end, duration)
+    if end - start < MIN_FREE_S - 1e-6:
+        where = f" (the video is {duration:g}s long)" if duration else ""
+        raise WorkflowError(f"The slot would be shorter than {MIN_FREE_S:g}s{where}. Give it a longer time range.")
+    return start, end
+
+
+def overlap_notes(job_dir: Path, start: float, end: float, ignore_id: int | None = None) -> list[str]:
+    """Plain-text notes about slots a range covers (only meaningful in free mode), for the assistant to mention."""
+    notes = []
+    for it in load_plan(job_dir)["items"]:
+        if it["id"] != ignore_id and it.get("enabled") is not False \
+                and start < it["timestamp_end"] and end > it["timestamp_start"]:
+            notes.append(f"It overlaps slot #{it['id']} ({it['timestamp_start']:g}s to {it['timestamp_end']:g}s); "
+                         "where they overlap, the later-starting one is on top.")
+    return notes
+
+
+def _check_room(plan: dict, start: float, end: float, ignore_id: int | None = None,
+                free: bool = False) -> tuple[float, float]:
     """Validate a new slot's time range against the video and the other slots; returns the rounded range."""
+    if free:
+        return _check_free(plan, start, end)
     start, end = round(float(start), 2), round(float(end), 2)
     if end - start < MIN_SLOT_S - 1e-6:
         raise WorkflowError(f"A slot must last at least {MIN_SLOT_S:g} seconds.")
@@ -402,9 +441,11 @@ def _check_room(plan: dict, start: float, end: float, ignore_id: int | None = No
     return start, end
 
 
-def check_room(job_dir: Path, start: float, end: float, ignore_id: int | None = None) -> tuple[float, float]:
-    """Raise WorkflowError unless a slot fits at [start, end]; used to fail fast before slow downloads."""
-    return _check_room(load_plan(job_dir), start, end, ignore_id)
+def check_room(job_dir: Path, start: float, end: float, ignore_id: int | None = None,
+               free: bool = False) -> tuple[float, float]:
+    """Raise WorkflowError unless a slot fits at [start, end]; used to fail fast before slow downloads. Returns the
+    (possibly trimmed) range. `free=True` applies only the chat's minimal rules."""
+    return _check_room(load_plan(job_dir), start, end, ignore_id, free)
 
 
 def read_transcript_words(job_dir: Path) -> list[dict]:
@@ -450,15 +491,16 @@ def _check_clip_fits(start: float, end: float, asset: dict) -> None:
 
 def add_slot(job_dir: Path, start: float, end: float, clip_file: Path, asset: dict, asset_type: str = "image",
              layout: str = "overlay", pip: dict | None = None, spoken_text: str = "", meaning: str = "",
-             reason: str = "Added from the chat assistant") -> dict:
+             reason: str = "Added from the chat assistant", free: bool = False) -> dict:
     """Add a brand-new slot (e.g. a picture or a pasted YouTube clip) at [start, end]. `clip_file` is a finished
-    clip; it is moved into clips/ under the new slot's id. Nothing is changed if the range doesn't fit."""
+    clip; it is moved into clips/ under the new slot's id. Nothing is changed if the range doesn't fit.
+    `free=True` (the chat) allows starting at 0 s and overlapping other slots."""
     if asset_type not in ("video", "image"):
         raise WorkflowError(f"Unknown asset type '{asset_type}'.")
     if layout not in LAYOUTS:
         raise WorkflowError(f"Unknown layout '{layout}'. Choose one of: {', '.join(LAYOUTS)}.")
     plan = load_plan(job_dir)
-    start, end = _check_room(plan, start, end)
+    start, end = _check_room(plan, start, end, free=free)
     _check_clip_fits(start, end, asset)
     new_id = max((i["id"] for i in plan["items"]), default=0) + 1
     asset = {**asset, "status": "ok", "path": _file_clip(job_dir, Path(clip_file), new_id)}

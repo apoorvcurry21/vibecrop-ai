@@ -32,11 +32,6 @@ def _slot_ids(args: dict) -> list[int]:
     return [int(v)] if isinstance(v, (int, float)) and not isinstance(v, bool) else []
 
 
-def _with_gaps_hint(ctx: ToolContext, exc: Exception) -> ToolError:
-    gaps = ", ".join(f"{a:g}-{b:g}s" for a, b in workflow.free_gaps(ctx.job)) or "none"
-    return ToolError(f"{exc} Free time ranges for a new slot: {gaps}.")
-
-
 def _target(ctx: ToolContext, args: dict, default_len: float) -> tuple[int | None, float, float]:
     """Where the new media goes: (slot_id or None, start, end). Checks the room before any slow work starts."""
     if args.get("slot_id") is not None:
@@ -50,9 +45,9 @@ def _target(ctx: ToolContext, args: dict, default_len: float) -> tuple[int | Non
     end = _opt_num(args, "end")
     end = start + default_len if end is None else end
     try:
-        workflow.check_room(ctx.job, start, end)
+        start, end = workflow.check_room(ctx.job, start, end, free=True)  # may trim a range that runs past the end
     except workflow.WorkflowError as exc:
-        raise _with_gaps_hint(ctx, exc) from None
+        raise ToolError(str(exc)) from None
     return None, start, end
 
 
@@ -82,10 +77,12 @@ def _place(ctx: ToolContext, args: dict, slot_id: int | None, start: float, end:
             item = workflow.add_slot(
                 ctx.job, start, end, clip, asset, asset_type, layout="pip" if wants_pip else (layout or "overlay"),
                 pip={k: v for k, v in (pip or {}).items() if v is not None} or None,
-                spoken_text=_spoken(ctx.job, start, end), meaning=asset.get("title", "")[:90])
+                spoken_text=_spoken(ctx.job, start, end), meaning=asset.get("title", "")[:90], free=True)
     except workflow.WorkflowError as exc:
-        raise _with_gaps_hint(ctx, exc) from None
-    return {"ok": True, "slot": slot_view(item)}
+        raise ToolError(str(exc)) from None
+    out = {"ok": True, "slot": slot_view(item)}
+    notes = workflow.overlap_notes(ctx.job, item["timestamp_start"], item["timestamp_end"], ignore_id=item["id"])
+    return {**out, "notes": notes} if notes else out
 
 
 def _tmp_clip(job: Path, suffix: str = ".mp4") -> Path:

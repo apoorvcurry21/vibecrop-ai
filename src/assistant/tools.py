@@ -272,9 +272,9 @@ def _delete_slot(ctx: ToolContext, args: dict) -> dict:
     return {"ok": True}
 
 
-@tool("set_timing", "Move or resize a slot on the timeline. It cannot overlap neighbours, start before 1 s, last "
-      "under 1.5 s, or be longer than its clip (unless refetch is true, which downloads a longer clip and may "
-      "pick a different video).",
+@tool("set_timing", "Move or resize a slot on the timeline. No restrictions: it can start at 0 s, be short, or "
+      "overlap other slots. Only the video's length and the slot's clip length limit it (a longer slot needs "
+      "refetch=true, which downloads a longer clip and may pick a different video).",
       {"slot_id": _p("integer", "slot id"), "start": _p("number", "new start, seconds"),
        "end": _p("number", "new end, seconds"), "refetch": _p("boolean", "fetch a longer clip if needed")},
       required=("slot_id", "start", "end"), mutating=True,
@@ -282,8 +282,10 @@ def _delete_slot(ctx: ToolContext, args: dict) -> dict:
       label=lambda a: f"Retiming slot {a.get('slot_id')}")
 def _set_timing(ctx: ToolContext, args: dict) -> dict:
     item = workflow.set_timing(ctx.job, _slot_id(args), _num(args, "start"), _num(args, "end"),
-                               refetch=bool(args.get("refetch")))
-    return {"ok": True, "slot": slot_view(item)}
+                               refetch=bool(args.get("refetch")), free=True)
+    out = {"ok": True, "slot": slot_view(item)}
+    notes = workflow.overlap_notes(ctx.job, item["timestamp_start"], item["timestamp_end"], ignore_id=item["id"])
+    return {**out, "notes": notes} if notes else out
 
 
 @tool("swap_slots", "Trade the clips between two slots. Timing, layout and removed-state stay with each slot.",

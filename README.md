@@ -136,6 +136,8 @@ buttons cannot do:
   layouts to tap: *full screen*, *split* (picture on top, you below) or *small box* (picture-in-picture, with a
   position and size).
 
+**No timing rules in the chat:** you can put things at 0 s, make them as short as you like, or lay them over other slots (the later-starting one is drawn on top, and the assistant tells you when one covers another). Only the video's length and a clip's own length limit it. The sliders in the editor keep their guard rails.
+
 Edits apply instantly and **Undo** (top of the panel, or just say "undo") reverts the last ten changes, including
 replaced clips. The chat history is saved per job in `chat.json` (a few KB); attached/generated pictures and undo
 snapshots are temporary and deleted with the other temp files after a render.

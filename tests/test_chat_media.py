@@ -372,16 +372,62 @@ def test_web_picture_gets_a_credit_line(tmp_path, monkeypatch):
     assert out["ok"] and slot(job, 3)["asset"]["credit"] == "Image: site2.com"
 
 
-def test_overlapping_placement_fails_fast_with_the_free_ranges(tmp_path):
+@needs_ffmpeg
+def test_the_chat_can_place_media_anywhere_even_at_the_very_start_or_over_other_slots(tmp_path):
     job = make_job(tmp_path)
     att = assets.save_attachment(job, "p.png", png_bytes())
+    # the case that was refused before: the first 2.4 seconds, where the speaker "owns the opening"
+    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 0.0, "end": 2.4, "layout": "pip"})
+    assert out["ok"] and (out["slot"]["start"], out["slot"]["end"]) == (0.0, 2.4)
+    assert out["notes"][0].startswith("It overlaps slot #1")  # 0-2.4 s runs into slot 1 (2-6 s): allowed, but said
+    # fully on top of an existing slot, and back to back with no gap
+    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 3.0, "end": 5.0})
+    assert out["ok"] and "slot #1" in out["notes"][0]
+    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 6.0, "end": 8.0})
+    assert out["ok"] and "notes" not in out  # merely touching slot 1 (2-6 s) at 6.0 is not an overlap, and no gap is needed
+    assert sorted(i["id"] for i in workflow.load_plan(job)["items"]) == [1, 2, 3, 4, 5]
+    assert [i["timestamp_start"] for i in workflow.load_plan(job)["items"]] == sorted(
+        i["timestamp_start"] for i in workflow.load_plan(job)["items"])  # still kept in timeline order
+
+
+@needs_ffmpeg
+def test_free_placement_trims_a_range_that_runs_past_the_end_and_rejects_only_the_pointless(tmp_path):
+    job = make_job(tmp_path)  # a 30 s video
+    att = assets.save_attachment(job, "p.png", png_bytes())
+    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 28.0, "end": 35.0})
+    assert out["ok"] and (out["slot"]["start"], out["slot"]["end"]) == (28.0, 30.0)  # trimmed to the video's end
     before = (job / "plan.json").read_text()
-    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 3.0})
-    assert "overlaps slot #1" in out["error"] and "6.1-13.9s" in out["error"] and "18.1-30s" in out["error"]
-    assert (job / "plan.json").read_text() == before and not snapshots.can_undo(job)
-    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "slot_id": 99})
-    assert "No B-roll with id 99" in out["error"]
+    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 29.9, "end": 40.0})
+    assert "shorter than 0.3s" in out["error"] and (job / "plan.json").read_text() == before
+    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 5.0, "end": 5.0})
+    assert "shorter than 0.3s" in out["error"]
+    out = run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": -3.0, "end": 1.0})
+    assert out["ok"] and out["slot"]["start"] == 0.0  # a negative start just means 0
+    assert "No B-roll with id 99" in run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "slot_id": 99})["error"]
     assert "Unknown layout" in run_tool(ctx_for(job, att), "place_image", {"image": "att_1", "start": 20, "layout": "x"})["error"]
+
+
+def test_the_chat_can_move_a_slot_anywhere_but_the_editors_own_rules_are_unchanged(tmp_path):
+    job = make_job(tmp_path)
+    out = run_tool(ctx_for(job), "set_timing", {"slot_id": 1, "start": 0.0, "end": 9.0})  # over the 1 s intro + into slot 2's gap
+    assert out["ok"] and out["slot"]["start"] == 0.0
+    out = run_tool(ctx_for(job), "set_timing", {"slot_id": 2, "start": 8.0, "end": 12.0})  # right on top of slot 1
+    assert out["ok"] and "slot #1" in out["notes"][0]
+    out = run_tool(ctx_for(job), "set_timing", {"slot_id": 2, "start": 25.0, "end": 99.0})  # runs past the video: trimmed
+    assert out["ok"] and out["slot"]["end"] == 30.0
+    # the slider/editor path (workflow.set_timing without free=True) keeps its guard rails
+    with pytest.raises(workflow.WorkflowError, match="cannot start before"):
+        workflow.set_timing(job, 1, 0.2, 5.0)
+    with pytest.raises(workflow.WorkflowError, match="at least"):
+        workflow.set_timing(job, 1, 2.0, 2.5)
+    with pytest.raises(workflow.WorkflowError, match="overlaps"):
+        workflow.add_slot(job, 3.0, 5.0, Path("x"), {"clip_duration": 10.0})
+
+
+def test_a_clip_still_cannot_be_longer_than_it_has_footage(tmp_path):
+    job = make_job(tmp_path)  # clips have 9 s of footage
+    out = run_tool(ctx_for(job), "set_timing", {"slot_id": 1, "start": 0.0, "end": 12.0})
+    assert "only 9.0s" in out["error"] and slot(job, 1)["timestamp_start"] == 2.0  # unchanged
 
 
 def test_a_failing_image_leaves_nothing_behind(tmp_path):
@@ -468,8 +514,8 @@ def test_youtube_clip_errors_are_plain_and_change_nothing(tmp_path, monkeypatch)
     out = run_tool(ctx_for(job), "place_youtube_clip", {"url": "https://youtu.be/dQw4w9WgXcQ", "start": 20.0})
     assert "what to look for" in out["error"]
     out = run_tool(ctx_for(job), "place_youtube_clip", {"url": "https://youtu.be/dQw4w9WgXcQ", "from_time": "1:00",
-                                                         "start": 20.0, "end": 40.0})
-    assert "overlaps" in out["error"] or "only" in out["error"] or "under" in out["error"]
+                                                         "start": 5.0, "end": 25.0})
+    assert "under 12 seconds" in out["error"]  # a 20 s B-roll clip is too long; timing is not a limit
     assert (job / "plan.json").read_text() == before
 
 

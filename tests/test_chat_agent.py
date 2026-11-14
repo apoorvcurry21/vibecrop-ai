@@ -75,8 +75,8 @@ def test_a_failing_tool_leaves_the_project_exactly_as_it_was(tmp_path):
     job = make_job(tmp_path)
     before = (job / "plan.json").read_text()
     ctx = ctx_for(job)
-    out = run_tool(ctx, "set_timing", {"slot_id": 1, "start": 10.0, "end": 15.0})  # runs into slot 2
-    assert "cannot end after" in out["error"] and not ctx.changed
+    out = run_tool(ctx, "set_timing", {"slot_id": 1, "start": 10.0, "end": 10.1})  # a zero-length slot
+    assert "shorter than 0.3s" in out["error"] and not ctx.changed
     assert (job / "plan.json").read_text() == before and not snapshots.can_undo(job)
     assert "No B-roll with id 9" in run_tool(ctx, "set_layout", {"slot_id": 9, "layout": "split"})["error"]
 
@@ -270,12 +270,12 @@ def test_tool_round_trip_edits_the_plan_and_feeds_the_result_back(tmp_path):
 
 def test_a_tool_error_goes_back_to_the_model_which_can_recover(tmp_path):
     job = make_job(tmp_path)
-    client = FakeClient([chunk(call("set_timing", slot_id=1, start=10, end=15))],
+    client = FakeClient([chunk(call("set_timing", slot_id=1, start=10, end=10.1))],
                         [chunk(call("set_timing", slot_id=1, start=3, end=6))],
                         [chunk(text("Moved it to 3-6s."))])
     ev = run_agent(job, client)
     first_resp = client.models.calls[1]["contents"][-1].parts[0].function_response.response
-    assert "cannot end after" in first_resp["error"]
+    assert "shorter than 0.3s" in first_resp["error"]
     assert (slot(job, 1)["timestamp_start"], slot(job, 1)["timestamp_end"]) == (3.0, 6.0)
     assert ev[-1]["changed"] is True and ev[-1]["text"] == "Moved it to 3-6s."
 
