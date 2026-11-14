@@ -97,7 +97,8 @@ streamlit run app.py        # then open http://localhost:8501
    captions). Press **Build B-roll plan** (plan -> download clips; the transcript from the analysis is reused;
    resumable if something fails). The review screen has a "re-plan" box to change the count or notes later.
    If Gemini is unavailable the suggestion falls back to about one B-roll per 8 seconds.
-2. **Review**: every B-roll has a playable preview, its timing, what the speaker says, and an editable
+2. **Review**: every B-roll shows a still with a **Play** button (the video player loads only when you press it,
+   which keeps a page with many slots light), its timing, what the speaker says, and an editable
    search query. **Search with this query** fetches a new clip, **Regenerate asset** picks a different video
    for the same query, **Remove slot** keeps the speaker on screen there.
 3. **Edit a slot** (switch on "Edit layout, timing, order and framing" on its row):
@@ -115,7 +116,16 @@ streamlit run app.py        # then open http://localhost:8501
 4. **Approve and render**: burns captions (2-4 word chunks, active word in yellow) in the original language,
    English, or Roman Hindi (Gemini rewrites the text; timings are kept), then deletes the temporary clips and
    audio, keeping only `final.mp4` and the JSON files. The sidebar shows temp storage against a 32 GB budget.
-   Cleanup only ever touches job folders inside `VIBECROP_WORKDIR/jobs`.
+   Cleanup only ever touches job folders inside `VIBECROP_WORKDIR/jobs`. A progress bar follows the encode.
+
+### Speed notes
+
+- B-roll clips download in parallel (`SOURCING_WORKERS`, default 4). Measured on 4 real YouTube clips:
+  98.8 s one at a time, 49.4 s with 4 workers.
+- An upload is written once, straight into the job folder.
+- The final export uses the NVIDIA encoder when ffmpeg has a working one (`VIBECROP_ENCODER=cpu` forces the CPU).
+  Previews always use the CPU, so they match the CPU export.
+- Every job keeps a `perf.log` with the time each stage took (transcribe, plan, sourcing, render).
 
 ### AI assistant (chat)
 

@@ -30,6 +30,11 @@ def _ffmpeg_png(args: list[str]) -> bytes:
     return out.stdout
 
 
+def thumb_png(clip: Path, width: int = 360) -> bytes:
+    """A small still from near the start of a B-roll clip, for the review list (the player loads on demand)."""
+    return _ffmpeg_png(["-an", "-ss", "0.3", "-i", str(clip), "-vf", f"scale={width}:-2"])
+
+
 def frame_png(clip: Path, framing: dict | None, layout: str, duration: float, at: str,
               clip_len: float | None = None, pip: dict | None = None) -> bytes:
     """One still of the framed B-roll box (the whole 9:16 frame for overlay, the top half for split, the small

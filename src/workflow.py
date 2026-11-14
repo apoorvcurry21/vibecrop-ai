@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Callable
 
-from src import config
+from src import config, perf
 from src.cleanup import purge_job_temp
 from src.planning import pipeline as planning
 from src.planning import recommend
@@ -85,9 +85,28 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
     if copy_into_job:
         source = job / f"source{video_path.suffix.lower() or '.mp4'}"
         shutil.copyfile(video_path, source)
-    write_job_meta(job, source_video=str(source), language=language, source_name=video_path.name,
+    _init_job_meta(job, source, video_path.name, language, total, notes, style)
+    return job
+
+
+def _init_job_meta(job: Path, source: Path, source_name: str, language: str, total: int | None, notes: str,
+                   style: str) -> None:
+    write_job_meta(job, source_video=str(source), language=language, source_name=source_name,
                    total_brolls=config.clamp_brolls(config.total_brolls() if total is None else total),
                    notes=" ".join((notes or "").split()), style=style)
+
+
+def create_job_from_upload(filename: str, data, language: str, root: Path | None = None, total: int | None = None,
+                           notes: str = "", style: str = "overlay") -> Path:
+    """Like `create_job(copy_into_job=True)` for a browser upload, but the bytes go straight into the job folder.
+    `data` is bytes or a memoryview (e.g. `UploadedFile.getbuffer()`): no staging file, one write instead of two."""
+    if style not in STYLES:
+        raise WorkflowError(f"Unknown video style '{style}'. Choose one of: {', '.join(STYLES)}.")
+    name = Path(filename).name
+    job = config.new_job_dir(name, root=jobs_root(root).parent)
+    source = job / f"source{Path(name).suffix.lower() or '.mp4'}"
+    source.write_bytes(data)
+    _init_job_meta(job, source, name, language, total, notes, style)
     return job
 
 
@@ -100,10 +119,12 @@ def analyse(job_dir: Path, log: Callable[[str], None] = print) -> dict:
         raise WorkflowError("The source video for this job is missing.")
     if not (job_dir / "transcript.json").is_file():
         log("Transcribing audio with Groq Whisper...")
-        transcription.run(video, meta["language"], job_dir=job_dir)
+        with perf.stage(job_dir, "transcribe"):
+            transcription.run(video, meta["language"], job_dir=job_dir)
     transcript = json.loads((job_dir / "transcript.json").read_text(encoding="utf-8"))
     log("Asking Gemini how many B-rolls suit this video...")
-    suggestion = recommend.recommend_count(transcript)
+    with perf.stage(job_dir, "recommend_count"):
+        suggestion = recommend.recommend_count(transcript)
     write_job_meta(job_dir, suggested_brolls=suggestion["count"], suggested_reason=suggestion["reason"],
                    suggested_source=suggestion["source"],
                    video_duration=float(transcript.get("video_duration") or transcript.get("duration") or 0.0))
@@ -169,13 +190,16 @@ def run_pipeline(job_dir: Path, log: Callable[[str], None] = print, total: int |
         raise WorkflowError("The source video for this job is missing. Point the job at the video file first.")
     if not (job_dir / "transcript.json").is_file():
         log("Transcribing audio with Groq Whisper...")
-        transcription.run(video, meta["language"], job_dir=job_dir)
+        with perf.stage(job_dir, "transcribe"):
+            transcription.run(video, meta["language"], job_dir=job_dir)
     if not (job_dir / "plan.json").is_file():
         log("Planning B-rolls with Gemini...")
-        planning.run(job_dir, total=total or meta.get("total_brolls"), notes=meta.get("notes", ""),
-                     style=meta.get("style", "overlay"))
+        with perf.stage(job_dir, "plan"):
+            planning.run(job_dir, total=total or meta.get("total_brolls"), notes=meta.get("notes", ""),
+                         style=meta.get("style", "overlay"))
     log("Downloading B-roll clips...")
-    sourcing.run(job_dir, log=log)
+    with perf.stage(job_dir, "sourcing"):
+        sourcing.run(job_dir, log=log)
 
 
 def load_plan(job_dir: Path) -> dict:
@@ -609,15 +633,18 @@ def set_split_face_y(job_dir: Path, value: float) -> None:
 
 
 def render_final(job_dir: Path, caption_mode: str | None, auto_clean: bool = True,
-                 log: Callable[[str], None] = print, root: Path | None = None) -> tuple[Path, int]:
-    """Render final.mp4, then (optionally) purge temp media. Returns (final path, bytes freed)."""
+                 log: Callable[[str], None] = print, root: Path | None = None,
+                 progress: Callable[[float], None] | None = None) -> tuple[Path, int]:
+    """Render final.mp4, then (optionally) purge temp media. Returns (final path, bytes freed).
+    `progress(fraction)` is called while the video encodes (for a progress bar)."""
     video = source_video_path(job_dir)
     if video is None:
         raise WorkflowError("The source video for this job is missing.")
     plan = load_plan(job_dir)
     plan["status"] = "approved"
     _save(job_dir, plan)
-    final = rendering.run(job_dir, video, caption_mode=caption_mode, log=log)
+    extra = {"progress": progress} if progress else {}
+    final = rendering.run(job_dir, video, caption_mode=caption_mode, log=log, **extra)
     freed = purge_job_temp(job_dir, root=root) if auto_clean else 0
     if auto_clean:
         log("Cleaned temporary clips and audio.")

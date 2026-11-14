@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from src import config
+from src import config, perf
 from src.captions.chunks import chunk_words
 from src.captions.rewrite import MODES, CaptionError, rewrite_chunks
 from src.rendering.ass import caption_events, credit_event, text_events, write_ass
@@ -29,7 +29,8 @@ def load_caption_chunks(job_dir: Path, mode: str, transcript: dict, topic: str =
 
 
 def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, caption_mode: str | None = None,
-        log: Callable[[str], None] = print, client=None) -> Path:
+        log: Callable[[str], None] = print, client=None,
+        progress: Callable[[float], None] | None = None) -> Path:
     job_dir, main_video = Path(job_dir), Path(main_video)
     if not main_video.is_file():
         raise RenderError(f"Main video not found: {main_video}")
@@ -84,7 +85,9 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
         ass_name = "overlays.ass"  # relative: FFmpeg runs with cwd=job_dir
 
     log(f"Rendering {len(overlays)} B-roll overlays" + (f" + {caption_mode} captions..." if caption_mode else "..."))
-    return render(main_video, overlays, job_dir / "final.mp4", subtitles_file=ass_name, cwd=job_dir, face_y=face_y)
+    with perf.stage(job_dir, "render"):
+        return render(main_video, overlays, job_dir / "final.mp4", subtitles_file=ass_name, cwd=job_dir,
+                      face_y=face_y, progress=progress, hw=True)
 
 
 def main() -> None:

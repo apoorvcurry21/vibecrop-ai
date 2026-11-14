@@ -6,10 +6,14 @@ Two layouts per B-roll slot:
 """
 from __future__ import annotations
 
+import functools
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
+from src import config
 from src.config import require_binary
 from src.rendering.framing import clip_filter, fill_crop, is_default
 
@@ -138,12 +142,81 @@ def build_filtergraph(overlays: list[Overlay], subtitles_file: str | None = None
     return ";".join(parts)
 
 
+@functools.lru_cache(maxsize=1)
+def nvenc_available() -> bool:
+    """True if this ffmpeg lists h264_nvenc AND a 1-frame test encode works (the listing alone is not enough:
+    it says yes on machines without an NVIDIA GPU or driver)."""
+    try:
+        ffmpeg = require_binary("ffmpeg")
+        listed = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20)
+        if "h264_nvenc" not in listed.stdout:
+            return False
+        test = subprocess.run(
+            [ffmpeg, "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2",
+             "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, text=True, timeout=30)
+        return test.returncode == 0
+    except Exception:  # noqa: BLE001 - any probe failure just means "use the CPU"
+        return False
+
+
+def video_encoder_args(preset: str, crf: int, hw: bool = False) -> list[str]:
+    """libx264 by default. With `hw=True` and VIBECROP_ENCODER=auto|nvenc, the NVIDIA encoder if it really works."""
+    pref = config.video_encoder_pref()
+    if hw and pref != "cpu" and nvenc_available():
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(crf + 1), "-b:v", "0",
+                "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+
+
+def probe_duration(path: Path) -> float:
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1",
+                          str(path)], capture_output=True, text=True)
+    try:
+        return float(out.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+def parse_progress_line(line: str, total_s: float) -> float | None:
+    """One line of `ffmpeg -progress pipe:1` -> fraction done (0-1), or None for lines that carry no time."""
+    key, _, value = line.strip().partition("=")
+    if key not in ("out_time_us", "out_time_ms") or total_s <= 0:  # (out_time_ms is in microseconds, too)
+        return None
+    try:
+        return min(max(int(value) / 1_000_000 / total_s, 0.0), 1.0)
+    except ValueError:  # "N/A" before the first frame
+        return None
+
+
+def _run_ffmpeg(cmd: list[str], cwd: Path | None, total_s: float, progress: Callable[[float], None] | None):
+    """Run ffmpeg. With a `progress` callback it streams `-progress` output and reports the fraction done."""
+    if progress is None:
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd) if cwd else None)
+    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as err:  # a file, so stderr cannot fill
+        proc = subprocess.Popen([*cmd[:1], "-progress", "pipe:1", "-nostats", *cmd[1:]], stdout=subprocess.PIPE,
+                                stderr=err, text=True, cwd=str(cwd) if cwd else None)
+        last = -1.0
+        for line in proc.stdout:  # type: ignore[union-attr]
+            frac = parse_progress_line(line, total_s)
+            if frac is not None and frac - last >= 0.01:
+                last = frac
+                try:
+                    progress(frac)
+                except Exception:  # noqa: BLE001 - a broken UI callback must never kill the render
+                    progress = lambda _f: None  # noqa: E731
+        proc.wait()
+        err.seek(0)
+        return subprocess.CompletedProcess(cmd, proc.returncode, "", err.read())
+
+
 def render(main_video: Path, overlays: list[Overlay], out_path: Path,
            subtitles_file: str | None = None, cwd: Path | None = None,
-           face_y: float = DEFAULT_FACE_Y, preset: str = "veryfast", crf: int = 20) -> Path:
+           face_y: float = DEFAULT_FACE_Y, preset: str = "veryfast", crf: int = 20,
+           progress: Callable[[float], None] | None = None, hw: bool = False) -> Path:
     """Render the final video. Only the main video's audio is used: B-roll audio is never mapped.
 
     `subtitles_file` must be relative to `cwd` (avoids Windows drive-letter escaping in filters).
+    `progress(fraction)` is called while ffmpeg runs; `hw=True` allows the GPU encoder (final export only).
     """
     ffmpeg = require_binary("ffmpeg")
     for ov in overlays:  # zoom/pan needs the clip's real size
@@ -156,11 +229,17 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
     cmd += [
         "-filter_complex", build_filtergraph(overlays, subtitles_file, face_y),
         "-map", "[v]", "-map", "0:a:0?",
-        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        *video_encoder_args(preset, crf, hw),
         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
         str(out_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd) if cwd else None)
+    total_s = probe_duration(main_video) if progress else 0.0
+    result = _run_ffmpeg(cmd, cwd, total_s, progress)
     if result.returncode != 0 or not out_path.is_file():
         raise RenderError(f"FFmpeg render failed: {result.stderr.strip()[-800:]}")
+    if progress:
+        try:
+            progress(1.0)
+        except Exception:  # noqa: BLE001 - the video is already written; a broken progress bar must not fail it
+            pass
     return out_path

@@ -92,6 +92,26 @@ def total_brolls() -> int:
     return clamp_brolls(raw) if raw else DEFAULT_TOTAL_BROLLS
 
 
+DEFAULT_SOURCING_WORKERS = 4
+MAX_SOURCING_WORKERS = 8
+
+
+def sourcing_workers() -> int:
+    """How many B-roll clips download at once (SOURCING_WORKERS in .env; 1 = one at a time)."""
+    raw = os.environ.get("SOURCING_WORKERS", "").strip()
+    try:
+        n = int(raw) if raw else DEFAULT_SOURCING_WORKERS
+    except ValueError:
+        n = DEFAULT_SOURCING_WORKERS
+    return max(1, min(MAX_SOURCING_WORKERS, n))
+
+
+def video_encoder_pref() -> str:
+    """VIBECROP_ENCODER: 'auto' (default: the GPU encoder if ffmpeg has a working one), 'cpu' or 'nvenc'."""
+    raw = os.environ.get("VIBECROP_ENCODER", "").strip().lower()
+    return raw if raw in {"auto", "cpu", "nvenc"} else "auto"
+
+
 def max_video_seconds() -> float:
     raw = os.environ.get("MAX_VIDEO_SECONDS", "").strip()
     return float(raw) if raw else float(DEFAULT_MAX_VIDEO_SECONDS)

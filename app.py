@@ -75,6 +75,35 @@ def cached_source_view(clip: str, mtime: float, framing_json: str, layout: str, 
     return preview.source_view_png(Path(clip), json.loads(framing_json), layout, pip=json.loads(pip_json))
 
 
+@st.cache_data(show_spinner=False, max_entries=128)
+def cached_thumb(clip: str, mtime: float) -> bytes:
+    return preview.thumb_png(Path(clip))
+
+
+@st.cache_data(show_spinner=False, ttl=30)
+def cached_usage() -> int:
+    """The temp-folder size walks every file in the workdir, so it must not run on every rerun."""
+    return workdir_usage_bytes()
+
+
+@st.fragment
+def slot_player(clip: str, mtime: float, item_id: int) -> None:
+    """A still with a play button; the real video player mounts only when asked. A page with many <video>
+    elements makes the browser (and every rerun) heavy, and most slots are never played."""
+    state = f"vid{item_id}_{mtime}"
+    box = st.empty()
+    if not st.session_state.get(state):
+        with box.container():
+            try:
+                st.image(cached_thumb(clip, mtime), use_container_width=True)
+            except Exception:  # noqa: BLE001 - a missing still must never break the list
+                st.caption("No still available.")
+            if st.button("▶ Play", key=f"play_{state}"):
+                st.session_state[state] = True
+    if st.session_state.get(state):  # the click above lands here in the same run: the still is replaced by the player
+        box.video(clip)
+
+
 def flash(*messages: str) -> None:
     """Remember messages (e.g. swap warnings) across the st.rerun() that follows an action."""
     st.session_state.setdefault("flash", []).extend(messages)
@@ -280,7 +309,7 @@ with st.sidebar:
         "Delete temporary clips after render", value=True,
         help="Keeps only final.mp4 and the JSON files. Untick it to try another caption language without re-downloading.",
     )
-    usage = workdir_usage_bytes()
+    usage = cached_usage()
     st.metric("Temp storage used", fmt_bytes(usage), help=f"Folder: {config.workdir_root()}")
     if over_budget():
         st.warning(f"Over the {BUDGET_GB:g} GB budget. Delete old job folders.")
@@ -340,11 +369,7 @@ if job is None:
     if sig and draft is None and st.session_state.get("failed_sig") != sig:
         try:
             if up:
-                tmp = config.workdir_root() / "uploads" / Path(up.name).name
-                tmp.parent.mkdir(parents=True, exist_ok=True)
-                tmp.write_bytes(up.getbuffer())
-                draft = workflow.create_job(tmp, spoken, copy_into_job=True)
-                tmp.unlink(missing_ok=True)
+                draft = workflow.create_job_from_upload(up.name, up.getbuffer(), spoken)
             else:
                 draft = workflow.create_job(local_path, spoken)
             st.session_state.update(draft_job=str(draft), draft_sig=sig)
@@ -472,7 +497,7 @@ for item in items:
         left, mid, right = st.columns([2, 4, 2], vertical_alignment="top")
         with left:
             if clip and clip.is_file() and not removed:
-                st.video(str(clip))
+                slot_player(str(clip), clip.stat().st_mtime, item["id"])
             elif removed:
                 st.caption("Removed: the speaker stays on screen.")
             elif asset.get("status") == "failed":
@@ -520,11 +545,14 @@ if workflow.source_video_path(job) is None:
 else:
     if st.button("Approve and render", type="primary"):
         with st.status("Rendering your reel...", expanded=True) as status:
+            bar = status.progress(0.0, text="Preparing...")
             try:
                 _, freed = workflow.render_final(
                     job, caption_mode if captions_on else None, auto_clean=auto_clean,
                     log=lambda m: status.write(m),
+                    progress=lambda f: bar.progress(f, text=f"Encoding video: {f:.0%}"),
                 )
+                bar.empty()
                 status.update(label="Done" + (f" - freed {fmt_bytes(freed)}" if freed else ""), state="complete")
             except Exception as exc:  # noqa: BLE001
                 status.update(label="Render failed", state="error")

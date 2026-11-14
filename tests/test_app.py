@@ -174,9 +174,24 @@ def test_slot_editor_opens_with_sliders_and_previews(tmp_path, monkeypatch):
     job, at = open_editor(tmp_path, monkeypatch)
     assert not at.exception, [e.value for e in at.exception]
     assert [s.label for s in at.slider if s.label == "Zoom"] == ["Zoom", "Zoom"]  # start + end keyframe
-    assert len(at.get("image")) == 2  # first-frame + last-frame stills
+    assert len(at.get("image")) == 2 + 2  # one list still per slot + the editor's first-frame and last-frame stills
     assert button(at, "Swap with previous").disabled and not button(at, "Swap with next").disabled
     assert button(at, "Save framing").disabled  # nothing changed yet
+
+
+@needs_ffmpeg
+def test_slot_videos_load_only_when_play_is_pressed(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIBECROP_WORKDIR", str(tmp_path))
+    job = make_editable_job(tmp_path)
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["job_dir"] = str(job)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.get("video")) == 0  # two slots, no <video> player mounted yet
+    plays = [b for b in at.button if b.label == "▶ Play"]
+    assert len(plays) == 2
+    plays[0].click().run()
+    assert not at.exception and len(at.get("video")) == 1  # only the slot that was asked for
 
 
 @needs_ffmpeg
@@ -195,7 +210,7 @@ def test_zoom_preset_and_save_framing_are_stored_in_the_plan(tmp_path, monkeypat
 def test_switching_the_preview_to_16_9_shows_the_whole_clip(tmp_path, monkeypatch):
     job, at = open_editor(tmp_path, monkeypatch)
     at.radio(key="view1").set_value("16:9 (whole clip, crop outlined)").run()
-    assert not at.exception and len(at.get("image")) == 1
+    assert not at.exception and len(at.get("image")) == 2 + 1  # the two list stills + the whole-clip view
 
 
 @needs_ffmpeg
