@@ -34,6 +34,21 @@ pip install -r requirements.txt
 copy .env.example .env   # then add your Groq and Gemini keys
 ```
 
+### Run on Google Colab (for a slow laptop)
+
+Open `colab/VibeCrop_Colab.ipynb` in Colab and run the five cells in order. Add `GROQ_API_KEY` and `GEMINI_API_KEY`
+under **Secrets** first (Notebook access on). It installs ffmpeg and the app, keeps the sound library and the noise
+model in a `VibeCrop` folder on your Google Drive (downloaded once), and prints a link to the app.
+
+- The install (1-2 min) happens in every new session; the sound library is a one-time download.
+- The link changes every session, free Colab stops after a while, and **anyone with the link can use the app and your
+  API quota**, so do not share it.
+- This notebook has not been run on Colab by its author (the code and helpers are tested on Windows, the helpers
+  also on their own): expect to fix a detail or two the first time, and tell the maintainer. On Colab the bold-pop
+  caption font (Impact) is installed best-effort; without it a default bold font is used.
+- A permanent deployment needs a small server; the same code runs there (set `VIBECROP_SFX_DIR`, `VIBECROP_WORKDIR`
+  and the two keys).
+
 ## Phase 1: transcribe a video
 
 ```
@@ -270,4 +285,5 @@ src/
                    #       snapshots.py (undo), ytclip.py / media.py / fetch.py (clips and pictures), ui.py (panel)
 scripts/make_layout_mockups.py   # redraws the layout example pictures shown in the chat
 scripts/build_sfx_library.py     # downloads the sound-effect library once (never committed)
+colab/                           # VibeCrop_Colab.ipynb + colab_setup.py (run the app on Google Colab)
 ```
