@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from src import config, perf
+from src.captions import styles
 from src.captions.chunks import chunk_words
 from src.captions.rewrite import MODES, CaptionError, rewrite_chunks
 from src.rendering.ass import caption_events, credit_event, text_events, write_ass
@@ -40,6 +41,7 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
     job_meta = json.loads(job_meta_file.read_text(encoding="utf-8")) if job_meta_file.is_file() else {}
     face_y = float(job_meta.get("split_face_y", DEFAULT_FACE_Y))
 
+    cap = styles.caption_settings(plan)
     overlays: list[Overlay] = []
     events: list[str] = []
     split_spans: list[tuple[float, float]] = []
@@ -75,13 +77,14 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
         except CaptionError as exc:
             log(f"Caption rewrite failed ({exc}); using the original captions instead.")
             chunks = load_caption_chunks(job_dir, "original", transcript)
-        events += caption_events(chunks, split_spans)
+        chunks = styles.fit_chunks(chunks, styles.get_style(cap["style"])["max_words"])
+        events += caption_events(chunks, split_spans, style_id=cap["style"], emphasis=cap["emphasis"])
 
     events += text_events(plan.get("texts", []))
 
     ass_name = None
     if events:
-        write_ass(job_dir / "overlays.ass", events)
+        write_ass(job_dir / "overlays.ass", events, cap["style"])
         ass_name = "overlays.ass"  # relative: FFmpeg runs with cwd=job_dir
 
     log(f"Rendering {len(overlays)} B-roll overlays" + (f" + {caption_mode} captions..." if caption_mode else "..."))

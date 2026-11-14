@@ -127,6 +127,23 @@ streamlit run app.py        # then open http://localhost:8501
   Previews always use the CPU, so they match the CPU export.
 - Every job keeps a `perf.log` with the time each stage took (transcribe, plan, sourcing, render).
 
+### Caption styles and highlighted words
+
+Open **Captions: style and highlighted words** on the review screen (above Export).
+
+| Style | Look |
+|---|---|
+| **Classic** | White bold text with a black outline; the spoken word turns yellow (the original look). |
+| **Bold pop (Hormozi)** | Very large ALL CAPS in Impact, 1-3 words at a time; the spoken word turns neon green and pops. |
+| **Karaoke box** | Clean bold text; the spoken word sits on a yellow highlight box. |
+
+To make words stand out, pick a caption line, tick the words, choose a colour and/or a size (up to 1.8x), and press
+**Apply to this line**. A word is matched by *when it is spoken*, so highlights also land on the right word in the
+English and Hinglish caption languages. The same works from the chat: *"caption style bold pop"*, *"highlight
+'never' in red"*, *"make 'Virat Kohli' bigger"*, *"clear the highlights"*. Choices are saved in `plan.json`
+(`captions.style`, `captions.emphasis`), so they are part of Undo. Changing the style never costs another Gemini
+call (the cached caption text is re-split into shorter lines instead).
+
 ### AI assistant (chat)
 
 Press the round **💬 button** (bottom right) on the review screen: a chat panel opens on the right and the page
@@ -142,6 +159,7 @@ buttons cannot do:
   "Image: site.com" credit line in the video.
 - *"generate a picture of ..."*: Gemini image generation (see the note below).
 - **Text on the video**: *"big yellow GOAT at the top from 7 s to 9 s"* (position, size, colour, font).
+- **Captions**: change the style and highlight words (see above).
 - When you add a picture or clip without saying how it should look, it shows **illustrated examples** of the three
   layouts to tap: *full screen*, *split* (picture on top, you below) or *small box* (picture-in-picture, with a
   position and size).
@@ -179,8 +197,10 @@ src/
   transcription/   # Phase 1
   planning/        # Phase 2
   sourcing/        # Phase 3
-  rendering/       # Phase 3-5 (compose.py = layouts, framing.py = zoom/pan maths, preview.py = editor previews)
-  assistant/       # chat: agent.py (Gemini tool-calling loop), tools.py + media_tools.py (what it can do),
+  rendering/       # Phase 3-5 (compose.py = layouts, framing.py = zoom/pan maths, preview.py = editor previews,
+                   #           ass.py = caption/credit/text subtitles)
+  captions/        # chunks.py, rewrite.py, styles.py (the 3 caption presets + word emphasis)
+  assistant/       # chat: agent.py (Gemini tool-calling loop), tools.py + media_tools.py + caption_tools.py (what it can do),
                    #       snapshots.py (undo), ytclip.py / media.py / fetch.py (clips and pictures), ui.py (panel)
 scripts/make_layout_mockups.py   # redraws the layout example pictures shown in the chat
 ```

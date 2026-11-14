@@ -5,6 +5,8 @@ import os
 import re
 from pathlib import Path
 
+from src.captions import styles
+
 OUT_W, OUT_H = 1080, 1920
 # Split slots: captions are centred on the border line (alignment 5 = middle of the screen) and the credit
 # sits just above the border, at the bottom of the b-roll half.
@@ -15,10 +17,50 @@ LATIN_FONT = "Arial"
 DEVA_FONT = "Nirmala UI" if os.name == "nt" else "Noto Sans Devanagari"  # Arial has no Devanagari glyphs
 
 
-def header() -> str:
+def bgr(rgb: str) -> str:
+    """'FF3B30' (RGB hex) -> the ASS colour '&H00303BFF&' (BGR)."""
+    rgb = rgb.upper()
+    return f"&H00{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}&"
+
+
+BOX_PAD = 14  # how far the highlight box of the karaoke style reaches around the active word
+
+
+def _style_line(name: str, font: str, size: int, bold: bool, primary: str, outline_colour: str, outline: float,
+                shadow: float, alignment: int, margin_v: int) -> str:
+    c = lambda rgb: bgr(rgb).rstrip("&")  # noqa: E731 - Style lines write colours without the closing "&"
+    return (f"Style: {name},{font},{size},{c(primary)},{c(primary)},{c(outline_colour)},&H64000000,"
+            f"{-1 if bold else 0},0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},60,60,{margin_v},1")
+
+
+def caption_style_lines(style_id: str = styles.DEFAULT_STYLE) -> list[str]:
+    """ASS style lines for one caption preset: the normal and split-slot variants, in Latin and Devanagari, plus
+    (karaoke) the layer that draws the highlight box behind the spoken word."""
+    st = styles.get_style(style_id)
+    lines = []
+    for name, font, size, bold, align, margin in (
+        ("CaptionLatin", st["font"], st["size"], st["bold"], 2, st["margin_v"]),
+        ("CaptionDeva", DEVA_FONT, st["size_deva"], True, 2, st["margin_v"]),
+        ("CaptionLatinSplit", st["font"], st["size"], st["bold"], 5, 0),
+        ("CaptionDevaSplit", DEVA_FONT, st["size_deva"], True, 5, 0),
+    ):
+        lines.append(_style_line(name, font, size, bold, st["primary"], "000000", st["outline"], st["shadow"],
+                                 align, margin))
+        if st["box"]:  # same metrics, so the box lines up exactly with the word underneath
+            lines.append(_style_line("Active" + name.removeprefix("Caption"), font, size, bold, st["active"],
+                                     st["box_color"], BOX_PAD, 0, align, margin))
+    return lines
+
+
+def header(style_id: str = styles.DEFAULT_STYLE) -> str:
     fmt = ("Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
            "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
            "MarginL, MarginR, MarginV, Encoding")
+    cap = caption_style_lines(style_id)
+    by_name = {line.split(":", 1)[1].split(",", 1)[0].strip(): line for line in cap}
+    caption_block = "\n".join([by_name["CaptionLatin"], by_name["CaptionDeva"]])
+    split_block = "\n".join([by_name["CaptionLatinSplit"], by_name["CaptionDevaSplit"]])
+    active_block = "".join("\n" + line for name, line in by_name.items() if name.startswith("Active"))
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {OUT_W}
@@ -29,12 +71,10 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: {fmt}
 Style: Credit,{LATIN_FONT},34,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2.5,0,2,40,40,150,1
-Style: CaptionLatin,{LATIN_FONT},74,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,2,60,60,400,1
-Style: CaptionDeva,{DEVA_FONT},70,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,2,60,60,400,1
+{caption_block}
 Style: CreditSplit,{LATIN_FONT},34,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2.5,0,2,40,40,{SPLIT_CREDIT_MARGIN_V},1
-Style: CaptionLatinSplit,{LATIN_FONT},74,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,5,60,60,0,1
-Style: CaptionDevaSplit,{DEVA_FONT},70,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,5,60,60,0,1
-Style: Text,{LATIN_FONT},104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,2,8,60,60,0,1
+{split_block}
+Style: Text,{LATIN_FONT},104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,2,8,60,60,0,1{active_block}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -117,12 +157,57 @@ def text_events(texts: list[dict]) -> list[str]:
     return events
 
 
-def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | None = None) -> list[str]:
-    """One event per spoken word: the whole chunk is shown, the active word is yellow.
+POP_FROM = 0.82  # the spoken word starts at this fraction of its size and grows to full size (bold pop style)
+POP_MS = 90
+
+
+def _num(x: float) -> str:
+    return f"{x:.0f}"
+
+
+def _word_markup(text: str, active: bool, emph: dict | None, st: dict, layer: str = "base") -> str:
+    """ASS text for one word. `layer` is "base" (the whole line) or "box" (the karaoke highlight layer, where only
+    the spoken word is visible). Both layers carry the same size tags on every word, so the two lines have the
+    same width and height and the box lines up exactly with its word."""
+    body = escape(text)
+    if st["uppercase"]:
+        body = body.upper()
+    e_color = emph.get("color") if emph else None
+    scale = float(emph.get("scale", 1.0)) if emph else 1.0
+    pop = st["pop"] and active and layer == "base"
+    size = ""
+    if pop:
+        base = scale * 100
+        size = (f"\\fscx{_num(base * POP_FROM)}\\fscy{_num(base * POP_FROM)}"
+                f"\\t(0,{POP_MS},\\fscx{_num(base)}\\fscy{_num(base)})")
+    elif scale != 1.0:
+        size = f"\\fscx{_num(scale * 100)}\\fscy{_num(scale * 100)}"
+
+    if layer == "box":
+        if not active:  # invisible, but it still takes up its space
+            return f"{{\\alpha&HFF&{size}}}{body}{{\\r}}"
+        tags = (f"\\c{bgr(e_color)}" if e_color else "") + size
+        return f"{{{tags}}}{body}{{\\r}}" if tags else body
+
+    color = e_color or (st["active"] if active and not st["box"] else None)
+    tags = (f"\\c{bgr(color)}" if color else "") + size
+    if not tags:
+        return body
+    if color and not size:
+        return f"{{{tags}}}{body}{{\\c{bgr(st['primary'])}}}"  # the long-standing classic form
+    return f"{{{tags}}}{body}{{\\r}}"
+
+
+def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | None = None,
+                   style_id: str = styles.DEFAULT_STYLE, emphasis: list[dict] | None = None) -> list[str]:
+    """One event per spoken word: the whole chunk is shown and the spoken word is highlighted the way the style
+    says (yellow, green + pop, or a highlight box). Words covered by an `emphasis` entry get their own colour/size.
 
     Time inside a split slot (`split_spans`) uses the centred-on-the-border caption style. A word that straddles
     a slot boundary is cut there, so the caption moves exactly when the layout changes."""
+    st = styles.get_style(style_id)
     spans = split_spans or []
+    emph = emphasis or []
     events: list[str] = []
     for ci, chunk in enumerate(chunks):
         words = chunk["words"]
@@ -130,6 +215,7 @@ def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | 
             continue
         base_style = "CaptionDeva" if any(DEVANAGARI.search(w["text"]) for w in words) else "CaptionLatin"
         next_start = chunks[ci + 1]["words"][0]["start"] if ci + 1 < len(chunks) and chunks[ci + 1]["words"] else None
+        marks = [styles.emphasis_for(w, emph) for w in words]
         for i, w in enumerate(words):
             start = w["start"]
             if i + 1 < len(words):
@@ -139,18 +225,25 @@ def caption_events(chunks: list[dict], split_spans: list[tuple[float, float]] | 
                 if next_start is not None:
                     end = min(end, next_start)  # never overlap the next caption
             end = max(end, start + 0.05)
-            line = " ".join(
-                f"{{\\c{YELLOW}}}{escape(x['text'])}{{\\c{WHITE}}}" if j == i else escape(x["text"])
-                for j, x in enumerate(words)
-            )
+            line = " ".join(_word_markup(x["text"], j == i, marks[j], st) for j, x in enumerate(words))
+            box_line = None
+            if st["box"]:
+                box_line = " ".join(_word_markup(x["text"], j == i, marks[j], st, layer="box")
+                                    for j, x in enumerate(words))
             cuts = sorted({c for span in spans for c in span if start < c < end})
             points = [start, *cuts, end]
             for seg_start, seg_end in zip(points, points[1:]):
-                style = base_style + ("Split" if any(a <= seg_start < b for a, b in spans) else "")
-                events.append(f"Dialogue: 1,{ass_time(seg_start)},{ass_time(seg_end)},{style},,0,0,0,,{line}")
+                suffix = "Split" if any(a <= seg_start < b for a, b in spans) else ""
+                t0, t1 = ass_time(seg_start), ass_time(seg_end)
+                events.append(f"Dialogue: 1,{t0},{t1},{base_style}{suffix},,0,0,0,,{line}")
+                if box_line is not None:
+                    # Its own layer: libass pushes overlapping events of the SAME layer apart (so the box would
+                    # float above the line), but events on different layers are drawn in place, on top.
+                    active_style = "Active" + base_style.removeprefix("Caption") + suffix
+                    events.append(f"Dialogue: 2,{t0},{t1},{active_style},,0,0,0,,{box_line}")
     return events
 
 
-def write_ass(path: Path, events: list[str]) -> Path:
-    path.write_text(header() + "\n".join(events) + "\n", encoding="utf-8")
+def write_ass(path: Path, events: list[str], style_id: str = styles.DEFAULT_STYLE) -> Path:
+    path.write_text(header(style_id) + "\n".join(events) + "\n", encoding="utf-8")
     return path

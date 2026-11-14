@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from src import config, perf
+from src.captions import styles as caption_styles
 from src.cleanup import purge_job_temp
 from src.planning import pipeline as planning
 from src.planning import recommend
@@ -625,6 +626,73 @@ def remove_text(job_dir: Path, text_id: int) -> None:
     _text(plan, text_id)
     plan["texts"] = [t for t in plan["texts"] if t["id"] != text_id]
     _save(job_dir, plan)
+
+
+# ---------------------------------------------------------------- caption style and word emphasis
+MIN_EMPHASIS_S = 0.05
+
+
+def _captions(plan: dict) -> dict:
+    cap = plan.setdefault("captions", {})
+    if cap.get("style") not in caption_styles.STYLES:
+        cap["style"] = caption_styles.DEFAULT_STYLE
+    cap.setdefault("emphasis", [])
+    return cap
+
+
+def set_caption_style(job_dir: Path, style_id: str) -> str:
+    if style_id not in caption_styles.STYLES:
+        raise WorkflowError(f"Unknown caption style '{style_id}'. Choose one of: {', '.join(caption_styles.STYLES)}.")
+    plan = load_plan(job_dir)
+    _captions(plan)["style"] = style_id
+    _save(job_dir, plan)
+    return style_id
+
+
+def add_emphasis(job_dir: Path, start: float, end: float, color=None, scale=None, text: str = "") -> dict:
+    """Make the caption words spoken between `start` and `end` stand out: a different colour and/or a bigger size
+    (scale 1.0-1.8). Asking again for the same words replaces the earlier choice instead of stacking."""
+    try:
+        color = caption_styles.normalize_color(color)
+        scale = caption_styles.normalize_scale(scale if scale is not None else (
+            caption_styles.DEFAULT_EMPHASIS_SCALE if color is None else 1.0))
+    except caption_styles.CaptionStyleError as exc:
+        raise WorkflowError(str(exc)) from exc
+    if color is None and scale == 1.0:
+        raise WorkflowError("Nothing to change: give a colour and/or a size above 1.0.")
+    start, end = round(float(start), 2), round(float(end), 2)
+    if start < 0 or end - start < MIN_EMPHASIS_S:
+        raise WorkflowError("Pick a time range that starts at 0 s or later and is not empty.")
+    plan = load_plan(job_dir)
+    duration = float(plan.get("video_duration") or 0.0)
+    if duration and start > duration:
+        raise WorkflowError(f"The video is only {duration:g}s long.")
+    cap = _captions(plan)
+    same = next((e for e in cap["emphasis"] if abs(e["start"] - start) < 0.1 and abs(e["end"] - end) < 0.1), None)
+    if same is None and len(cap["emphasis"]) >= caption_styles.MAX_EMPHASIS:
+        raise WorkflowError(f"At most {caption_styles.MAX_EMPHASIS} emphasised words: clear some first.")
+    entry = same if same is not None else {"id": max((e.get("id", 0) for e in cap["emphasis"]), default=0) + 1}
+    entry.update({"start": start, "end": end, "text": " ".join(str(text).split())[:80], "color": color, "scale": scale})
+    if same is None:
+        cap["emphasis"].append(entry)
+        cap["emphasis"].sort(key=lambda e: e["start"])
+    _save(job_dir, plan)
+    return entry
+
+
+def remove_emphasis(job_dir: Path, emphasis_id: int | None = None) -> int:
+    """Remove one emphasis entry, or all of them when no id is given. Returns how many were removed."""
+    plan = load_plan(job_dir)
+    cap = _captions(plan)
+    before = len(cap["emphasis"])
+    if emphasis_id is None:
+        cap["emphasis"] = []
+    else:
+        if not any(e.get("id") == emphasis_id for e in cap["emphasis"]):
+            raise WorkflowError(f"No emphasised word with id {emphasis_id}.")
+        cap["emphasis"] = [e for e in cap["emphasis"] if e.get("id") != emphasis_id]
+    _save(job_dir, plan)
+    return before - len(cap["emphasis"])
 
 
 def set_split_face_y(job_dir: Path, value: float) -> None:

@@ -57,6 +57,9 @@ Pictures and clips:
 - Layouts: full screen = overlay, a small box = pip with a position (top-right by default), split = top half.
 - After placing something the user cares about seeing, you may call preview_slot.
 
+Captions:
+- set_caption_style changes the look of ALL captions (classic, bold_pop, karaoke_box). highlight_words makes chosen words stand out (colour and/or bigger); it highlights every occurrence by default, so tell the user how many it found (and where, if few). "Make X bigger" = size only; "highlight X in red" = colour only; just "highlight X" = leave colour and size out. clear_highlights removes them. Captions only appear in the exported video.
+
 Current project (may be stale after your own edits; call get_plan for a fresh copy):
 """
 

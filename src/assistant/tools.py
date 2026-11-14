@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from src import workflow
 from src.assistant import snapshots
+from src.captions import styles as caption_styles
 from src.planning.layouts import LAYOUTS, STYLES
 from src.rendering import framing as framing_mod
 from src.rendering.ass import TEXT_COLORS, TEXT_FONTS, TEXT_POSITIONS, TEXT_SIZES
@@ -134,6 +135,7 @@ def plan_view(job: Path) -> dict:
     plan = workflow.load_plan(job)
     meta = workflow.read_job_meta(job)
     items = sorted(plan["items"], key=lambda i: i["timestamp_start"])
+    cap = caption_styles.caption_settings(plan)
     return {
         "video_topic": plan.get("video_topic", ""), "video_duration": plan.get("video_duration"),
         "style": meta.get("style", "overlay"),
@@ -141,6 +143,9 @@ def plan_view(job: Path) -> dict:
         "texts": [{k: t[k] for k in ("id", "text", "start", "end", "pos", "size", "color")}
                   for t in plan.get("texts", [])],
         "free_gaps": [list(g) for g in workflow.free_gaps(job)],
+        "captions": {"style": cap["style"], "styles": list(caption_styles.STYLES),
+                     "highlights": [{k: e.get(k) for k in ("id", "text", "start", "end", "color", "scale")}
+                                    for e in cap["emphasis"]]},
         "can_undo": snapshots.can_undo(job),
     }
 
@@ -462,4 +467,4 @@ def run_tool(ctx: ToolContext, name: str, args: dict | None) -> dict:
 
 
 # Registered last: these tools need the helpers defined above.
-from src.assistant import media_tools  # noqa: E402,F401
+from src.assistant import caption_tools, media_tools  # noqa: E402,F401

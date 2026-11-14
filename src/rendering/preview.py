@@ -14,6 +14,7 @@ from src.rendering import framing as fr
 from src.rendering.compose import FPS, OUT_H, OUT_W, Overlay, RenderError, box_for, probe_size, render
 
 PREVIEW_W = 360  # width of the still previews, in pixels
+POP_SETTLE_S = 0.15  # caption stills are taken this long after a word starts (the pop animation lasts 0.09 s)
 START_COLOR, END_COLOR = (255, 214, 10), (64, 220, 255)
 
 
@@ -46,6 +47,34 @@ def frame_png(clip: Path, framing: dict | None, layout: str, duration: float, at
     n = 0 if at == "start" else last
     return _ffmpeg_png(["-an", "-t", f"{duration:.3f}", "-i", str(clip), "-vf",
                         f"{chain},select=eq(n\\,{n}),scale={PREVIEW_W}:-2"])
+
+
+def caption_frame_png(chunk: dict, style_id: str, emphasis: list[dict] | None = None, active: int = 0,
+                      width: int = PREVIEW_W) -> bytes:
+    """One still of a caption line in the chosen style, drawn by the same ASS/libass path as the export. The frame is
+    taken a moment after word `active` starts, so the pop animation has finished. Plain dark background."""
+    import tempfile
+
+    from src.rendering import ass
+
+    words = chunk["words"]
+    t0 = float(words[0]["start"])
+    shift = lambda x: {**x, "start": float(x["start"]) - t0, "end": float(x["end"]) - t0}  # noqa: E731
+    local = {"id": 0, "start": 0.0, "end": float(chunk["end"]) - t0, "words": [shift(w) for w in words]}
+    local_emph = [shift(e) for e in emphasis or []]
+    active = min(max(active, 0), len(words) - 1)
+    at = local["words"][active]["start"] + POP_SETTLE_S
+    events = ass.caption_events([local], style_id=style_id, emphasis=local_emph)
+    with tempfile.TemporaryDirectory() as d:
+        ass.write_ass(Path(d) / "c.ass", events, style_id)
+        cmd = [require_binary("ffmpeg"), "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i",
+               f"color=c=0x2b2f3a:s={OUT_W}x{OUT_H}:r=25:d={at + 1:.2f}", "-vf",
+               f"subtitles=c.ass,scale={width}:-2", "-ss", f"{at:.3f}", "-frames:v", "1",
+               "-f", "image2pipe", "-vcodec", "png", "-"]
+        out = subprocess.run(cmd, capture_output=True, cwd=d)
+    if out.returncode != 0 or not out.stdout:
+        raise PreviewError(f"Could not draw the caption preview: {out.stderr.decode(errors='replace').strip()[-300:]}")
+    return out.stdout
 
 
 def _dashed_rect(draw, box, color, width=3, dash=10):
