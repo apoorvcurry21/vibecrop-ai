@@ -536,17 +536,6 @@ if final.is_file():
 
 
 # ---------------------------------------------------------------- AI assistant (floating button -> right-hand panel)
-def _open_chat() -> None:
-    st.session_state["chat_open"] = True
+from src.assistant.shell import shell as chat_shell  # noqa: E402 - a light import; the chat code loads on open
 
-
-if st.session_state.get("chat_open"):
-    from src.assistant import ui as chat_ui  # imported only once the panel is opened: the closed state costs nothing
-
-    chat_ui.mount(job)
-else:
-    from src.assistant.style import FAB_CSS
-
-    st.markdown(FAB_CSS, unsafe_allow_html=True)
-    with st.container(key="chat_fab"):
-        st.button("💬", key="chat_open_btn", on_click=_open_chat, help="Open the AI assistant")
+chat_shell(str(job))  # a fragment: opening / closing the chat never reruns the whole page

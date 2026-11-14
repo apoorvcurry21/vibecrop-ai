@@ -1,7 +1,7 @@
 """Streamlit chat panel. Imported only when the panel is opened (see app.py).
 
-The panel is a fragment: sending a message, clicking a chip or Undo reruns only the chat, never the whole review
-page. The page is refreshed (one full rerun) only after a turn that actually changed the project."""
+The panel runs inside the fragment in shell.py: sending a message, clicking a chip, opening or closing reruns only
+the chat, never the whole review page. The page is refreshed (one full rerun) only after a turn that actually changed the project."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -120,8 +120,7 @@ def _run_turn(job: Path, box, text: str, attachments: list[Attachment], problems
     return state["changed"]
 
 
-@st.fragment
-def chat_panel(job_str: str) -> None:
+def chat_panel(job_str: str) -> None:  # runs inside shell.shell, which is the fragment
     job = Path(job_str)
     title, undo_col, close_col = st.columns([5, 2, 1], vertical_alignment="center")
     title.markdown("**AI assistant**")

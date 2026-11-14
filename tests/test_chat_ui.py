@@ -167,3 +167,16 @@ def test_cards_from_a_live_turn_are_shown_and_saved_with_the_message(tmp_path, m
     assert not at.exception, [e.value for e in at.exception]
     assert store.load(job)[-1]["cards"] == [{"type": "image", "path": "assets/gen_1.png", "caption": "gen_1"}]
     assert len(at.get("image")) >= 1
+
+
+def test_the_chat_toggle_lives_in_a_fragment_so_closing_does_not_redraw_the_page():
+    """Closing used to rerun the whole review page (every slot and video player), which felt slow. The open/close
+    controls must stay inside the shell fragment, and the panel must not be a second, nested fragment.
+    (AppTest cannot simulate fragment-scoped reruns, so this guards the structure; verify the speed in a browser.)"""
+    from src.assistant import shell, ui
+
+    assert hasattr(shell.shell, "__wrapped__")  # decorated with st.fragment
+    assert not hasattr(ui.chat_panel, "__wrapped__")
+    assert shell.shell.__wrapped__.__module__ == "src.assistant.shell"
+    app_src = Path(APP).read_text(encoding="utf-8")
+    assert "chat_shell(str(job))" in app_src and "chat_open_btn" not in app_src  # app.py no longer owns the toggle
