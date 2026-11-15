@@ -814,6 +814,43 @@ def set_split_face_y(job_dir: Path, value: float) -> None:
     write_job_meta(job_dir, split_face_y=round(min(max(float(value), 0.0), 1.0), 2))
 
 
+def _draft_signature(job_dir: Path, caption_mode: str | None) -> str:
+    """Fingerprint of everything the draft shows: the plan (slots, captions, sounds, texts), the caption language,
+    the facecam focus and which video it was cut from."""
+    import hashlib
+
+    meta = read_job_meta(job_dir)
+    plan_file = job_dir / "plan.json"
+    plan_bytes = plan_file.read_bytes() if plan_file.is_file() else b""
+    parts = [plan_bytes, (caption_mode or "").encode(), str(meta.get("split_face_y", "")).encode(),
+             str(meta.get("source_video", "")).encode()]
+    return hashlib.sha1(b"\x00".join(parts)).hexdigest()[:16]
+
+
+def draft_path(job_dir: Path) -> Path:
+    return job_dir / rendering.DRAFT_NAME
+
+
+def draft_is_current(job_dir: Path, caption_mode: str | None) -> bool | None:
+    """None if there is no draft; True if it still matches the plan; False if the plan changed since."""
+    if not draft_path(job_dir).is_file():
+        return None
+    return read_job_meta(job_dir).get("draft_sig") == _draft_signature(job_dir, caption_mode)
+
+
+def render_draft(job_dir: Path, caption_mode: str | None, log: Callable[[str], None] = print,
+                 progress: Callable[[float], None] | None = None) -> Path:
+    """A small, fast preview of the WHOLE reel (B-roll, captions, sounds) from the same plan and filter graph as the
+    export. It changes nothing: the plan is not approved and no temporary media is purged."""
+    video = source_video_path(job_dir)
+    if video is None:
+        raise WorkflowError("The source video for this job is missing.")
+    extra = {"progress": progress} if progress else {}
+    out = rendering.run(job_dir, video, caption_mode=caption_mode, log=log, draft=True, **extra)
+    write_job_meta(job_dir, draft_sig=_draft_signature(job_dir, caption_mode))
+    return out
+
+
 def render_final(job_dir: Path, caption_mode: str | None, auto_clean: bool = True,
                  log: Callable[[str], None] = print, root: Path | None = None,
                  progress: Callable[[float], None] | None = None) -> tuple[Path, int]:

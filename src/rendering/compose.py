@@ -64,7 +64,69 @@ class Sound:
     volume: float = 1.0
 
 
-AUDIO_RATE = 44100
+AUDIO_RATE = 48000  # the usual rate of phone/camera video: mixing sound effects must not downsample the voice
+EXPORT_CRF = 17  # near-transparent for a re-encode; the bitrate cap below keeps it from growing past the source
+MIN_CAP_KBPS, UNKNOWN_CAP_KBPS = 8000, 16000  # cap floor for low-bitrate sources / cap when the source rate is unknown
+MIN_AUDIO_KBPS, MAX_AUDIO_KBPS = 192, 320
+MIN_FPS, MAX_FPS = 24, 60
+
+
+@dataclass
+class SourceProfile:
+    """What the speaker video looks like, so the export can keep its frame rate and not go below its quality."""
+    fps: int = FPS
+    video_kbps: int = 0  # 0 = unknown
+    audio_kbps: int = 0
+
+    @property
+    def maxrate_kbps(self) -> int:
+        """Bitrate ceiling for the export: the source's own video bitrate (never more), but not below a floor."""
+        return max(self.video_kbps or UNKNOWN_CAP_KBPS, MIN_CAP_KBPS)
+
+    @property
+    def out_audio_kbps(self) -> int:
+        return min(max(self.audio_kbps, MIN_AUDIO_KBPS), MAX_AUDIO_KBPS)
+
+
+def snap_fps(value: float) -> int:
+    """59.76 -> 60, 29.97 -> 30, 23.976 -> 24; clamped to 24-60 (the graph needs a whole number)."""
+    return min(max(round(value), MIN_FPS), MAX_FPS) if value and value > 0 else FPS
+
+
+def _rate(text: str) -> float:
+    num, _, den = (text or "").partition("/")
+    try:
+        return float(num) / float(den or 1)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def probe_profile(path: Path) -> SourceProfile:
+    """Frame rate and bitrates of `path` (falls back to the defaults for anything ffprobe cannot tell)."""
+    import json
+
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                          "stream=codec_type,avg_frame_rate,r_frame_rate,bit_rate:format=bit_rate", "-of", "json",
+                          str(path)], capture_output=True, text=True)
+    try:
+        data = json.loads(out.stdout or "{}")
+    except ValueError:
+        return SourceProfile()
+    streams = data.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), {})
+
+    def kbps(value) -> int:
+        try:
+            return int(float(value) / 1000)
+        except (TypeError, ValueError):
+            return 0
+
+    a_kbps, v_kbps = kbps(audio.get("bit_rate")), kbps(video.get("bit_rate"))
+    if not v_kbps:  # some containers only state the total
+        v_kbps = max(kbps(data.get("format", {}).get("bit_rate")) - a_kbps, 0)
+    fps = _rate(video.get("avg_frame_rate", "")) or _rate(video.get("r_frame_rate", ""))
+    return SourceProfile(fps=snap_fps(fps), video_kbps=v_kbps, audio_kbps=a_kbps)
 
 
 def has_audio(path: Path) -> bool:
@@ -133,11 +195,12 @@ def box_for(layout: str, pip: dict | None = None) -> tuple[int, int]:
 
 
 def build_filtergraph(overlays: list[Overlay], subtitles_file: str | None = None,
-                      face_y: float = DEFAULT_FACE_Y) -> str:
+                      face_y: float = DEFAULT_FACE_Y, fps: int = FPS,
+                      scale_to: tuple[int, int] | None = None) -> str:
     """Chain: normalise main -> per slot add the clip (full frame, or top half + facecam + border)
-    -> (optional) burn subtitles."""
+    -> (optional) burn subtitles -> (optional) shrink to `scale_to`, e.g. for a draft preview."""
     splits = [ov for ov in overlays if ov.layout == "split"]
-    base = f"[0:v]{FILL_CROP},fps={FPS},format=yuv420p"
+    base = f"[0:v]{FILL_CROP},fps={fps},format=yuv420p"
     if splits:  # the speaker video is needed again for each split slot's facecam half
         copies = "".join(f"[m{k}]" for k in range(1, len(splits) + 1))
         parts = [f"{base},split={len(splits) + 1}[b0]{copies}"]
@@ -150,7 +213,7 @@ def build_filtergraph(overlays: list[Overlay], subtitles_file: str | None = None
         w, h = box_for(ov.layout, ov.pip)
         dur = ov.end - ov.start
         # Clip timestamps are shifted to start at the slot's start, so frames line up with the speaker.
-        chain = clip_filter(ov.framing, dur, w, h, ov.src_w, ov.src_h, FPS)
+        chain = clip_filter(ov.framing, dur, w, h, ov.src_w, ov.src_h, fps)
         gate = f"enable='between(t,{ov.start:.3f},{ov.end:.3f})'"
         if ov.layout == "pip":
             _, _, px, py = pip_geometry(ov.pip)
@@ -174,7 +237,9 @@ def build_filtergraph(overlays: list[Overlay], subtitles_file: str | None = None
         parts.append(f"[u{n}]drawbox=x=0:y={SPLIT_Y - BORDER_H // 2}:w={OUT_W}:h={BORDER_H}:"
                      f"color={BORDER_COLOR}:t=fill:{gate}[b{n}]")
     last = f"b{len(overlays)}"
-    parts.append(f"[{last}]subtitles={subtitles_file}[v]" if subtitles_file else f"[{last}]null[v]")
+    steps = ([f"subtitles={subtitles_file}"] if subtitles_file else []) + (
+        [f"scale={scale_to[0]}:{scale_to[1]}"] if scale_to else [])
+    parts.append(f"[{last}]{','.join(steps) or 'null'}[v]")
     return ";".join(parts)
 
 
@@ -195,13 +260,15 @@ def nvenc_available() -> bool:
         return False
 
 
-def video_encoder_args(preset: str, crf: int, hw: bool = False) -> list[str]:
-    """libx264 by default. With `hw=True` and VIBECROP_ENCODER=auto|nvenc, the NVIDIA encoder if it really works."""
+def video_encoder_args(preset: str, crf: int, hw: bool = False, maxrate_kbps: int | None = None) -> list[str]:
+    """libx264 by default. With `hw=True` and VIBECROP_ENCODER=auto|nvenc, the NVIDIA encoder if it really works.
+    `maxrate_kbps` caps the bitrate (quality still comes from the CRF / CQ; the cap only stops it growing past it)."""
+    cap = ["-maxrate", f"{maxrate_kbps}k", "-bufsize", f"{2 * maxrate_kbps}k"] if maxrate_kbps else []
     pref = config.video_encoder_pref()
     if hw and pref != "cpu" and nvenc_available():
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(crf + 1), "-b:v", "0",
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(crf + 1), "-b:v", "0", *cap,
                 "-pix_fmt", "yuv420p"]
-    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), *cap, "-pix_fmt", "yuv420p"]
 
 
 def probe_duration(path: Path) -> float:
@@ -249,12 +316,15 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
            subtitles_file: str | None = None, cwd: Path | None = None,
            face_y: float = DEFAULT_FACE_Y, preset: str = "veryfast", crf: int = 20,
            progress: Callable[[float], None] | None = None, hw: bool = False,
-           sounds: list[Sound] | None = None) -> Path:
+           sounds: list[Sound] | None = None, fps: int = FPS, maxrate_kbps: int | None = None,
+           audio_kbps: int = 192, scale_to: tuple[int, int] | None = None) -> Path:
     """Render the final video. Only the main video's audio is used: B-roll audio is never mapped.
 
     `subtitles_file` must be relative to `cwd` (avoids Windows drive-letter escaping in filters).
     `progress(fraction)` is called while ffmpeg runs; `hw=True` allows the GPU encoder (final export only).
     `sounds` are sound effects mixed into the speaker's audio (see build_audio_graph).
+    `fps`, `maxrate_kbps` and `audio_kbps` let the export follow the source video (see `probe_profile`);
+    `scale_to` shrinks the finished frame (draft previews).
     """
     ffmpeg = require_binary("ffmpeg")
     for ov in overlays:  # zoom/pan needs the clip's real size
@@ -264,7 +334,7 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
     for ov in overlays:
         # -t trims the clip to its slot length; -an drops any audio the source might carry.
         cmd += ["-an", "-t", f"{ov.end - ov.start:.3f}", "-i", str(ov.path)]
-    graph = build_filtergraph(overlays, subtitles_file, face_y)
+    graph = build_filtergraph(overlays, subtitles_file, face_y, fps=fps, scale_to=scale_to)
     audio_map = ["-map", "0:a:0?"]
     sounds = [snd for snd in (sounds or []) if snd.path.is_file()]
     if sounds:
@@ -275,8 +345,8 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
     cmd += [
         "-filter_complex", graph,
         "-map", "[v]", *audio_map,
-        *video_encoder_args(preset, crf, hw),
-        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+        *video_encoder_args(preset, crf, hw, maxrate_kbps),
+        "-c:a", "aac", "-b:a", f"{audio_kbps}k", "-movflags", "+faststart",
         str(out_path),
     ]
     total_s = probe_duration(main_video) if progress else 0.0

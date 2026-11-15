@@ -370,12 +370,12 @@ def test_chat_list_update_and_remove(sfx, tmp_path):
 
 def test_audio_graph_delays_scales_and_mixes_without_renormalising():
     g = build_audio_graph([Sound(Path("a.mp3"), 3.25, 0.8), Sound(Path("b.mp3"), 0.0, 1.5)], 2, True, 8.0)
-    assert "[0:a:0]aresample=44100,aformat=channel_layouts=stereo[a0]" in g
+    assert "[0:a:0]aresample=48000,aformat=channel_layouts=stereo[a0]" in g  # 48 kHz: a camera's voice is not downsampled
     assert "[2:a:0]" in g and "volume=0.800,adelay=3250|3250[s0]" in g
     assert "[3:a:0]" in g and "volume=1.500,adelay=0|0[s1]" in g
     assert "[a0][s0][s1]amix=inputs=3:duration=first:normalize=0" in g and g.endswith("alimiter=limit=0.97[aout]")
     silent = build_audio_graph([Sound(Path("a.mp3"), 1.0, 1.0)], 1, False, 8.0)
-    assert silent.startswith("anullsrc=r=44100:cl=stereo,atrim=0:8.000[a0]")  # a silent speaker video is mixed onto silence
+    assert silent.startswith("anullsrc=r=48000:cl=stereo,atrim=0:8.000[a0]")  # a silent speaker video is mixed onto silence
 
 
 def test_without_sounds_the_original_audio_mapping_is_kept(tmp_path, monkeypatch):

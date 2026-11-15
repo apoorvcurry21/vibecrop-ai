@@ -738,6 +738,25 @@ elif workflow.source_video_path(job) is None:
         workflow.write_job_meta(job, source_video=path.strip().strip('"'))
         st.rerun()
 else:
+    cap_arg = caption_mode if captions_on else None
+    draft_file = workflow.draft_path(job)
+    st.caption("Not sure how it looks yet? Make a small, fast draft of the whole reel (B-roll, captions and sounds "
+               "together) before the real export. The draft is low quality on purpose.")
+    if st.button("Preview full reel (draft, low quality)"):
+        with st.status("Making the draft preview...", expanded=True) as dstatus:
+            dbar = dstatus.progress(0.0, text="Preparing...")
+            try:
+                workflow.render_draft(job, cap_arg, log=lambda m: dstatus.write(m),
+                                      progress=lambda f: dbar.progress(f, text=f"Encoding draft: {f:.0%}"))
+                dbar.empty()
+                dstatus.update(label="Draft ready", state="complete")
+            except Exception as exc:  # noqa: BLE001
+                dstatus.update(label="Draft failed", state="error")
+                fail(exc)
+    if draft_file.is_file():
+        if workflow.draft_is_current(job, cap_arg) is False:
+            st.warning("This draft is out of date: you changed the plan after making it. Preview again to see the changes.")
+        st.video(str(draft_file))
     if st.button("Approve and render", type="primary"):
         with st.status("Rendering your reel...", expanded=True) as status:
             bar = status.progress(0.0, text="Preparing...")

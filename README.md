@@ -89,8 +89,12 @@ section (about 25% into the video) at up to 1080p, video-only, so B-roll is sile
 If a download fails it tries the next result, then the alternative queries. Clip metadata (channel, URL,
 window) is written back into `plan.json`.
 
-Rendering (`final.mp4`, 1080x1920, 30 fps) center-crops each clip to 9:16 without stretching, lays it over the
+Rendering (`final.mp4`, 1080x1920) center-crops each clip to 9:16 without stretching, lays it over the
 speaker only during its slot, never uses the clip's audio, and burns a small "Video: <channel>" credit line.
+The export **follows the speaker video**: its frame rate (24-60 fps, so a 60 fps recording stays 60 fps) and its
+quality (libx264 CRF 17, video bitrate capped at the source's own bitrate, never below an 8 Mbps ceiling; audio
+48 kHz, at least 192 kbps). Captions and overlays force a re-encode, so the file cannot be bit-identical to the
+source, and a B-roll section can never be sharper than the downloaded clip.
 A slot whose clip failed simply keeps the speaker on screen.
 
 Known limits: the clip window is chosen blindly, so some clips are off-topic (use the Phase 4 "Regenerate");
@@ -128,7 +132,11 @@ streamlit run app.py        # then open http://localhost:8501
      **Preview as 9:16** shows the first and last frame exactly as exported; **16:9** shows the whole source
      clip with the crop outlined (solid = start, dashed = end, dimmed = cut off). **Play preview with the
      speaker** renders a quick real clip of that slot with the same code as the final export.
-4. **Approve and render**: burns captions (2-4 word chunks, active word in yellow) in the original language,
+4. **Preview full reel (draft, low quality)**: before exporting, one click renders the WHOLE reel (B-roll, captions,
+   credits and sounds together) as a small 540x960, 30 fps `draft.mp4` from the same plan and filter graph as the
+   export, so it cannot disagree with it. It changes nothing (the plan is not approved, nothing is deleted) and
+   warns when the plan changed after the draft was made. The draft is removed by the post-render cleanup.
+5. **Approve and render**: burns captions (2-4 word chunks, active word in yellow) in the original language,
    English, or Roman Hindi (Gemini rewrites the text; timings are kept), then deletes the temporary clips and
    audio, keeping only `final.mp4` and the JSON files. The sidebar shows temp storage against a 32 GB budget.
    Cleanup only ever touches job folders inside `VIBECROP_WORKDIR/jobs`. A progress bar follows the encode.

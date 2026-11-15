@@ -110,6 +110,15 @@ def test_encoder_defaults_to_the_cpu_and_uses_nvenc_only_when_allowed(monkeypatc
     assert "libx264" in video_encoder_args("veryfast", 20, hw=True)  # asked for the GPU, but there is none
 
 
+def test_the_bitrate_cap_goes_to_both_encoders_and_is_absent_without_one(monkeypatch):
+    monkeypatch.setattr(compose, "nvenc_available", lambda: True)
+    monkeypatch.setenv("VIBECROP_ENCODER", "auto")
+    for hw in (False, True):
+        a = video_encoder_args("veryfast", 17, hw=hw, maxrate_kbps=20000)
+        assert a[a.index("-maxrate") + 1] == "20000k" and a[a.index("-bufsize") + 1] == "40000k"
+    assert "-maxrate" not in video_encoder_args("veryfast", 20) and "-maxrate" not in video_encoder_args("veryfast", 20, hw=True)
+
+
 def _ff(*args):
     subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", *args], check=True)
 
