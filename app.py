@@ -492,29 +492,21 @@ def mmss(seconds: float) -> str:
 
 
 def cleanup_summary(job: Path) -> None:
-    """What the talking-head cleanup did: the lengths, what was cut and why, and anything that was skipped."""
+    """What the audio cleanup did: the length, how the noise was removed, and anything that was skipped."""
     report = workflow.read_cleanup_report(job)
     if not report:
         return
-    st.success(f"Cleaned: {mmss(report['original_duration'])} to {mmss(report['clean_duration'])} "
-               f"({report['removed_pauses_s']:.1f} s of long pauses and {report['removed_retakes_s']:.1f} s of "
-               f"retakes and stutters removed, noise removed with {report['denoise']}).")
+    st.success(f"Audio cleaned ({mmss(report['clean_duration'])}): background noise removed with {report['denoise']}, "
+               "voice evened out. Nothing was cut.")
     for w in report.get("warnings", []):
         st.warning(w)
-    with st.expander(f"What was cut ({len(report.get('retakes', []))} retakes / stutters, "
-                     f"{report.get('pauses_cut', 0)} long pauses)"):
-        for r in report.get("retakes", []):
-            st.markdown(f"- **{r['reason'].replace('_', ' ')}** at {r['start']:.1f} s (original video): "
-                        f"\"{r['text']}\"")
-        if not report.get("retakes"):
-            st.caption("No retakes or stutters were found.")
-        st.caption("Times refer to the original recording. Taking the cleanup off (the checkbox above) goes back to "
-                   "the original video. Steps took: " + ", ".join(f"{k} {v:g} s" for k, v in report["seconds"].items()))
+    st.caption("Taking the cleanup off (the checkbox above) goes back to the original video. Steps took: "
+               + ", ".join(f"{k} {v:g} s" for k, v in report.get("seconds", {}).items()))
 
 
 def run_analysis(draft: Path) -> None:
     """Transcribe the video and ask Gemini how many B-rolls suit it; preset the count slider with the answer.
-    With the cleanup ticked it first denoises the audio and cuts pauses and retakes (a bit longer)."""
+    With the cleanup ticked it first removes background noise and evens out the voice (a bit longer)."""
     cleaning = bool(workflow.read_job_meta(draft).get("clean_talking_head"))
     with st.status("Cleaning the recording, then analysing it..." if cleaning else
                    "Analysing your video (transcribing, then asking the AI how many B-rolls suit it)...",
@@ -533,9 +525,9 @@ def run_analysis(draft: Path) -> None:
 if job is None:
     st.subheader("1. Choose your video")
     clean = st.checkbox(
-        "Clean the talking-head recording (remove background noise, long pauses and retakes)", key="clean_th",
-        help="For a raw take straight from the camera. It removes noise, cuts pauses longer than 0.6 s and the "
-             "failed attempts / stutters, evens out the voice, then works on the cleaned video. Adds about 10-30 s. "
+        "Clean the audio (remove background noise, even out the voice)", key="clean_th",
+        help="Removes background noise and evens out the voice, then works on the cleaned video. Nothing is cut: "
+             "edit out pauses and retakes before uploading. The picture is copied as it is. "
              "The original is kept; untick this to go back to it.")
     up = st.file_uploader("Upload a raw video (about 1-2 minutes)", type=["mp4", "mov", "mkv", "m4v"])
     local = st.text_input("...or the path of a video already on this PC", placeholder=r"D:\vids\my_video.mp4")
@@ -658,7 +650,7 @@ for message in st.session_state.pop("flash", []):
     st.warning(message)
 
 if workflow.read_cleanup_report(job):
-    with st.expander("Talking-head cleanup report"):
+    with st.expander("Audio cleanup report"):
         cleanup_summary(job)
 
 with st.expander("Video style (overlay, split or hybrid)"):

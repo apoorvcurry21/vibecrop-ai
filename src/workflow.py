@@ -78,7 +78,7 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
 
     `total` (1-15) is how many B-rolls to plan; `notes` are optional creator hints for the AI;
     `style` is the video style: "overlay", "split" or "hybrid" (see planning/layouts.py).
-    `clean=True` runs the talking-head cleanup (noise, pauses, retakes) when the job is analysed."""
+    `clean=True` runs the audio cleanup (noise removal, voice polish; no cuts) when the job is analysed."""
     if style not in STYLES:
         raise WorkflowError(f"Unknown video style '{style}'. Choose one of: {', '.join(STYLES)}.")
     video_path = Path(video_path)
@@ -122,7 +122,7 @@ def analyse(job_dir: Path, log: Callable[[str], None] = print) -> dict:
     if video is None:
         raise WorkflowError("The source video for this job is missing.")
     if meta.get("clean_talking_head") and not meta.get("cleaned"):
-        log("Cleaning the talking-head recording (noise, pauses, retakes)...")
+        log("Cleaning the audio (noise, voice level)...")
         with perf.stage(job_dir, "cleanup"):
             result = talkinghead.clean(job_dir, video, meta["language"], log=log)
         (job_dir / "transcript.json").write_text(json.dumps(result["transcript"], ensure_ascii=False, indent=2),

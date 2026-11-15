@@ -106,13 +106,6 @@ def models_dir() -> Path:
     return Path(raw) if raw else Path(__file__).resolve().parent.parent / "models"
 
 
-DEFAULT_GROQ_LLM = "openai/gpt-oss-120b"  # llama-3.3-70b is no longer offered on Groq; this one is fast and follows JSON
-
-
-def groq_llm_model() -> str:
-    return os.environ.get("GROQ_LLM_MODEL", "").strip() or DEFAULT_GROQ_LLM
-
-
 DEFAULT_SOURCING_WORKERS = 4
 MAX_SOURCING_WORKERS = 8
 
