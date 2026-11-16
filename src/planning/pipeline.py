@@ -43,9 +43,8 @@ def main() -> None:
     except (config.ConfigError, PlanningError) as exc:
         raise SystemExit(f"Error: {exc}")
     data = json.loads(out.read_text(encoding="utf-8"))
-    videos = sum(i["asset_type"] == "video" for i in data["items"])
     print(f"Saved {out}")
-    print(f"{len(data['items'])} B-rolls: {videos} video, {len(data['items']) - videos} image | topic: {data['video_topic']}")
+    print(f"{len(data['items'])} B-rolls | topic: {data['video_topic']}")
 
 
 if __name__ == "__main__":

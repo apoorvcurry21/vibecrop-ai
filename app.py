@@ -252,6 +252,44 @@ def captions_panel(job: Path) -> None:
                    + (" ..." if len(emphasis) > 12 else ""))
 
 
+def upload_panel(job: Path, plan: dict) -> None:
+    """Add a picture or a video of your own to the timeline. No chat and no AI: it is a plain form."""
+    from src.assistant import upload
+
+    n = st.session_state.get("upload_n", 0)  # bumping it after a success gives the form fresh, empty widgets
+    duration = float(plan.get("video_duration") or 0.0) or 600.0
+    gaps = workflow.free_gaps(job)
+    st.caption("Pick a picture or a short video, say when it appears and for how long. For a video you can also "
+               "choose which second of it to start from.")
+    with st.form(f"add_media_{n}"):
+        file = st.file_uploader("Picture or video", type=upload.FILE_TYPES, key=f"upload_file_{n}")
+        c1, c2, c3 = st.columns(3)
+        start = c1.number_input("Appears at (seconds)", 0.0, duration, float(gaps[0][0]) if gaps else 0.0, 0.1)
+        length = c2.number_input("Shows for (seconds)", 0.5, 12.0, upload.DEFAULT_LENGTH_S, 0.5)
+        from_s = c3.number_input("Video files: start from second", 0.0, 3600.0, 0.0, 0.5,
+                                 help="Which second of YOUR video to use. Ignored for pictures.")
+        layout = st.radio("Layout", list(LAYOUTS), format_func=LAYOUT_LABELS.get, horizontal=True)
+        p1, p2 = st.columns(2)
+        pos = p1.selectbox("Small box: position", list(PIP_POSITION_LABELS), format_func=PIP_POSITION_LABELS.get,
+                           index=list(PIP_POSITION_LABELS).index("top-right"))
+        size = p2.slider("Small box: size", PIP_MIN_SCALE, PIP_MAX_SCALE, 0.6, 0.05)
+        go = st.form_submit_button("Add to video", type="primary")
+    if not go:
+        return
+    if file is None:
+        st.warning("Choose a picture or a video first.")
+        return
+    with st.spinner("Adding..."):
+        try:
+            _, notes = upload.add_upload(job, file.name, file.getvalue(), start, length, layout, pos, size, from_s)
+        except upload.UploadError as exc:
+            fail(exc)
+            return
+    st.session_state["upload_n"] = n + 1
+    flash(*notes)
+    st.rerun()
+
+
 def flash(*messages: str) -> None:
     """Remember messages (e.g. swap warnings) across the st.rerun() that follows an action."""
     st.session_state.setdefault("flash", []).extend(messages)
@@ -717,6 +755,10 @@ for item in items:
             if st.toggle("Edit layout, timing, order and framing (zoom / pan)", key=f"edit{item['id']}"):
                 slot_editor(job, item["id"])
 
+# ---------------------------------------------------------------- your own picture / video
+with st.expander("Add your own picture or video"):
+    upload_panel(job, plan)
+
 # ---------------------------------------------------------------- captions: style + highlighted words
 with st.expander("Captions: style and highlighted words"):
     captions_panel(job)
@@ -728,7 +770,7 @@ with st.expander(f"Sound effects ({len(plan.get('sounds', []))})"):
 # ---------------------------------------------------------------- step 4: render
 st.subheader("4. Export")
 if workflow.source_video_path(job) is None and meta.get("cleaned"):
-    st.warning("This job used the talking-head cleanup, and the cleaned video was deleted after the render to save "
+    st.warning("This job used the audio cleanup, and the cleaned video was deleted after the render to save "
                "space. The plan only fits the cleaned video, so it cannot be rendered again from the original. "
                "Start a new video (untick 'Delete temporary clips after render' to be able to render again).")
 elif workflow.source_video_path(job) is None:

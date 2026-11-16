@@ -19,11 +19,6 @@ TRANSCRIPT = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _images_on(monkeypatch):
-    monkeypatch.setenv("ENABLE_IMAGES", "1")  # most tests exercise the mixed video/image plan
-
-
 def item(kind="video", start=10.0, end=14.0, **kw):
     base = dict(asset_type=kind, timestamp_start=start, timestamp_end=end,
                 search_query="stressed anxious person desk", alternative_queries=["a", "b"],
@@ -33,7 +28,7 @@ def item(kind="video", start=10.0, end=14.0, **kw):
 
 
 def good_items(n=10):
-    return [item("video" if i % 3 else "image", 5 + i * 9, 5 + i * 9 + (4 if i % 3 else 3)) for i in range(n)]
+    return [item("video", 5 + i * 9, 5 + i * 9 + 4) for i in range(n)]
 
 
 def reply(items):
@@ -50,12 +45,10 @@ class FakeClient:
         return SimpleNamespace(text=self.texts.pop(0))
 
 
-def test_valid_plan_any_mix_is_accepted():
-    for kinds in (["video"] * 10, ["image"] * 10, ["video"] * 7 + ["image"] * 3):
-        items = [item(k, 5 + i * 9, 5 + i * 9 + (4 if k == "video" else 3)) for i, k in enumerate(kinds)]
-        out = plan(TRANSCRIPT, total=10, client=FakeClient(reply(items)))
-        assert len(out["items"]) == 10 and out["status"] == "draft"
-        assert sorted(i["asset_type"] for i in out["items"]) == sorted(kinds)
+def test_a_valid_plan_is_accepted_and_every_item_is_video():
+    out = plan(TRANSCRIPT, total=10, client=FakeClient(reply(good_items())))
+    assert len(out["items"]) == 10 and out["status"] == "draft"
+    assert {i["asset_type"] for i in out["items"]} == {"video"}
 
 
 def test_snaps_to_word_boundaries():
@@ -171,21 +164,21 @@ def test_falls_back_to_next_model_when_primary_fails(monkeypatch):
     assert used == ["primary", "backup"] and out["model"] == "backup"
 
 
-def test_video_only_mode_rejects_images_then_accepts_videos(monkeypatch):
-    monkeypatch.delenv("ENABLE_IMAGES")
-    videos = [item("video", 5 + i * 9, 9 + i * 9) for i in range(10)]
-    client = FakeClient(reply(good_items()), reply(videos))  # first reply has images -> retry
+def test_an_image_item_from_gemini_is_rejected_and_retried():
+    """Regression for the removed image path: the planner only plans video, so an 'image' reply is asked again."""
+    with_image = good_items()
+    with_image[2]["asset_type"] = "image"
+    client = FakeClient(reply(with_image), reply(good_items()))
     out = plan(TRANSCRIPT, total=10, client=client)
     assert {i["asset_type"] for i in out["items"]} == {"video"} and len(client.calls) == 2
-    assert "switched off" in client.calls[1][-1].parts[0].text
+    assert "not valid JSON for the schema" in client.calls[1][-1].parts[0].text
 
 
-def test_video_only_prompt_replaces_rule_one():
+def test_prompt_is_video_only():
     from src.planning.prompt import get_system_prompt
 
-    assert get_system_prompt(True) == SYSTEM_PROMPT
-    video_only = get_system_prompt(False)
-    assert "images are switched off" in video_only and "COUNT AND MIX" not in video_only
+    assert get_system_prompt() == SYSTEM_PROMPT
+    assert "image" not in SYSTEM_PROMPT.lower() and "COUNT AND MIX" not in SYSTEM_PROMPT
 
 
 def test_prompt_contains_key_rules_and_transcript():
@@ -230,8 +223,8 @@ def test_hybrid_breaks_long_runs_and_replaces_a_useless_all_same_answer():
 
 def test_only_the_hybrid_prompt_asks_gemini_for_layout():
     from src.planning.prompt import get_system_prompt
-    assert "9. LAYOUT" in get_system_prompt(True, hybrid=True) and "9. LAYOUT" in get_system_prompt(False, hybrid=True)
-    assert "LAYOUT" not in get_system_prompt(True) and "LAYOUT" not in get_system_prompt(False)
+    assert "9. LAYOUT" in get_system_prompt(hybrid=True)
+    assert "LAYOUT" not in get_system_prompt()
 
 
 def test_plan_sets_layouts_from_the_style():

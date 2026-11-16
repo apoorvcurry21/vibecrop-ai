@@ -1,16 +1,14 @@
 """Snap Gemini's timestamps to spoken-word boundaries and check the plan's rules."""
 from __future__ import annotations
 
-from src.planning.prompt import (
-    IMAGE_MAX_S, IMAGE_MIN_S, INTRO_SAFE_S, MIN_GAP_S, VIDEO_MAX_S, VIDEO_MIN_S, max_gap_for,
-)
+from src.planning.prompt import INTRO_SAFE_S, MIN_GAP_S, VIDEO_MAX_S, VIDEO_MIN_S, max_gap_for
 from src.planning.schema import BRollItem
 
 EPS = 0.01
 
 
-def _bounds(asset_type: str) -> tuple[float, float]:
-    return (VIDEO_MIN_S, VIDEO_MAX_S) if asset_type == "video" else (IMAGE_MIN_S, IMAGE_MAX_S)
+def _bounds(asset_type: str = "video") -> tuple[float, float]:
+    return VIDEO_MIN_S, VIDEO_MAX_S
 
 
 def _nearest(values: list[float], target: float) -> float:
@@ -81,21 +79,19 @@ def resolve_layout(items: list[BRollItem], words: list[dict], duration: float) -
     return out
 
 
-def validate(items: list[BRollItem], total: int, duration: float, allow_images: bool = True) -> list[str]:
+def validate(items: list[BRollItem], total: int, duration: float) -> list[str]:
     """Return a list of human-readable problems; empty means the plan is valid."""
     errors: list[str] = []
     max_gap = max_gap_for(total, duration)
-    if not allow_images and any(i.asset_type == "image" for i in items):
-        errors.append('Images are switched off: every item must have asset_type "video".')
     if len(items) != total:
         errors.append(f"Return exactly {total} items; you returned {len(items)}.")
     prev_end = None
     for n, it in enumerate(items, 1):
         lo, hi = _bounds(it.asset_type)
         d = it.timestamp_end - it.timestamp_start
-        tag = f"Item {n} ({it.asset_type} at {it.timestamp_start:.2f}s)"
+        tag = f"Item {n} (at {it.timestamp_start:.2f}s)"
         if not lo - EPS <= d <= hi + EPS:
-            errors.append(f"{tag} lasts {d:.2f}s; {it.asset_type} items must last {lo:g}-{hi:g}s.")
+            errors.append(f"{tag} lasts {d:.2f}s; items must last {lo:g}-{hi:g}s.")
         if it.timestamp_start < INTRO_SAFE_S - EPS:
             errors.append(f"{tag} starts before {INTRO_SAFE_S:g}s.")
         if it.timestamp_end > duration + EPS:

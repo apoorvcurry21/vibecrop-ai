@@ -11,7 +11,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 
 1. **Transcription** - Groq API (Whisper) gives word- and sentence-level timestamps.
 2. **Planning** - Gemini (free tier) reads the transcript and outputs a strict JSON timeline of 1-15 B-roll slots (default 10).
-3. **Sourcing** - `yt-dlp --download-sections` pulls 3-5 s clips; DuckDuckGo / Unsplash supply images.
+3. **Sourcing** - `yt-dlp --download-sections` pulls 3-5 s clips. Your own pictures and videos can be added by hand.
 4. **Rendering** - FFmpeg center-crops to 9:16, mutes B-roll audio, overlays on the main track, burns captions.
 5. **UI** - Streamlit dashboard to edit queries / regenerate assets before export; temp files are purged after render.
 
@@ -19,7 +19,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 
 - [x] Phase 1: Audio extraction and Groq transcription
 - [x] Phase 2: Gemini editor (context and planning)
-- [x] Phase 3: Media sourcing and smart 9:16 formatting (video only; images are deferred)
+- [x] Phase 3: Media sourcing and smart 9:16 formatting (video only from the planner; you add your own pictures and clips)
 - [x] Phase 4: Streamlit mini-editor and caption export
 - [x] Phase 5: AI count suggestion, video styles (overlay / split / hybrid), timeline editing, zoom/pan framing
 
@@ -70,11 +70,10 @@ python -m src.planning.pipeline D:\vibecrop_tmp\jobs\<job folder>
 ```
 
 Gemini (`GEMINI_MODEL`, default `gemini-3.5-flash`, with `GEMINI_FALLBACK_MODELS` if it is overloaded)
-reads `transcript.json` and writes `plan.json`: 1-15 B-rolls (`TOTAL_BROLLS`, default 10). Gemini decides the video/image mix
-from the content. Each item has `asset_type`, `timestamp_start`, `timestamp_end`, a `search_query` and two
+reads `transcript.json` and writes `plan.json`: 1-15 B-rolls (`TOTAL_BROLLS`, default 10). Every item is a video clip. Each item has `asset_type`, `timestamp_start`, `timestamp_end`, a `search_query` and two
 `alternative_queries`. The prompt forbids literal readings of metaphors ("hit a wall" -> "stressed anxious person").
-Python snaps times to spoken-word boundaries and rejects plans with overlaps, wrong durations (video 3-5 s,
-image 2-4 s), bad queries or gaps over 25 s, then asks Gemini to fix them (up to 3 attempts).
+Python snaps times to spoken-word boundaries and rejects plans with overlaps, wrong durations (3-5 s),
+bad queries or gaps over 25 s, then asks Gemini to fix them (up to 3 attempts).
 The plan is a `draft` until the user approves it in the Phase 4 UI.
 
 ## Phase 3: source clips and render
@@ -99,7 +98,8 @@ A slot whose clip failed simply keeps the speaker on screen.
 Known limits: the clip window is chosen blindly, so some clips are off-topic (use the Phase 4 "Regenerate");
 some YouTube videos carry their own burned-in captions or watermarks; footage is third-party and copyrighted
 (credited, but you are responsible for how you publish it); YouTube may block downloads from cloud IPs.
-Images are off by default (`ENABLE_IMAGES=1` lets Gemini plan them; image sourcing is not built yet).
+The planner only plans video. To use a picture or a clip of your own, open **Add your own picture or video** on the
+review page (no AI involved) or attach it in the chat.
 
 ## Phase 4: the Streamlit editor
 
@@ -176,7 +176,7 @@ and retakes yourself before uploading. Before anything else happens:
    download is impossible a model-free filter (`afftdn`) is used and the report says so.
 2. The **cleaned** audio is transcribed with Groq Whisper (cleaner audio, better words and timestamps).
 3. **One ffmpeg pass** polishes the voice (rumble filter, a gentle EQ, a compressor, loudness about -16 LUFS; the
-   values are constants in `src/talkinghead/voice.py`) and writes `source_clean.mp4`. The picture is copied without
+   values are constants in `src/audio_cleanup/voice.py`) and writes `source_clean.mp4`. The picture is copied without
    re-encoding (instant, no quality loss); only if the file cannot be copied into an mp4 it is re-encoded.
 
 The plan, B-roll, captions, chat and export all work on the cleaned video. A short **report** shows the length and how
@@ -229,9 +229,6 @@ buttons cannot do:
   spoken (spelling-tolerant), and adds the picture there. An attached video works too: it cuts the part you choose.
 - **Paste a YouTube link**: *"cut 5 s of the football part and put it where it fits"*. Say a time (`2:15`) to use
   it, otherwise Gemini watches the video and picks the moment. Only the needed seconds are downloaded.
-- *"get me a picture of ..."*: web image search with thumbnails and a **Use this** button. Web pictures get a small
-  "Image: site.com" credit line in the video.
-- *"generate a picture of ..."*: Gemini image generation (see the note below).
 - **Text on the video**: *"big yellow GOAT at the top from 7 s to 9 s"* (position, size, colour, font).
 - **Captions**: change the style and highlight words (see above).
 - **Sound effects**: *"fah when I say 'bhai'"* (see above).
@@ -247,10 +244,6 @@ snapshots are temporary and deleted with the other temp files after a render.
 
 The chat uses `GEMINI_CHAT_MODEL` (default `gemini-3.5-flash-lite`, about 2 s per step when measured; `gemini-3.1-flash-lite`
 took 5-14 s and `gemini-3.5-flash` 10-20 s) and gives up on a stalled model after 30 s, then tries the next one.
-
-> **Image generation needs a billing-enabled Gemini key.** On the free tier every Gemini image model answers
-> "quota exceeded"; the assistant then says so and offers a web image search instead. Set `GEMINI_IMAGE_MODEL` to
-> pick a model. Real people and brands are often refused by the model, so web search is the better route for those.
 
 ### Video styles
 
@@ -275,7 +268,7 @@ src/
   rendering/       # Phase 3-5 (compose.py = layouts, framing.py = zoom/pan maths, preview.py = editor previews,
                    #           ass.py = caption/credit/text subtitles)
   captions/        # chunks.py, rewrite.py, styles.py (the 3 caption presets + word emphasis)
-  talkinghead/     # pipeline.py (the audio cleanup), denoise.py, voice.py
+  audio_cleanup/   # pipeline.py (the audio cleanup), denoise.py, voice.py
   sfx/            # catalog.py (what to download), library.py (index + fuzzy name lookup), fetch.py (YouTube / by name)
   assistant/       # chat: agent.py (Gemini tool-calling loop), tools.py + media_tools.py + caption_tools.py + sound_tools.py (what it can do),
                    #       snapshots.py (undo), ytclip.py / media.py / fetch.py (clips and pictures), ui.py (panel)

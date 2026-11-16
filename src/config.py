@@ -22,7 +22,7 @@ DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"  # 2.5-* models 404 for new keys; 3.7/
 DEFAULT_GEMINI_FALLBACKS = "gemini-3.1-flash-lite"
 GEMINI_TIMEOUT_MS = 120_000
 CHAT_TIMEOUT_MS = 30_000  # the chat must stay snappy: a stalled model is abandoned after this and the next one is tried
-DEFAULT_TOTAL_BROLLS = 10  # the video/image split is chosen by Gemini, not fixed
+DEFAULT_TOTAL_BROLLS = 10
 MAX_BROLLS = 15  # the user picks 1 to 15 (hard cap)
 
 
@@ -78,11 +78,6 @@ def gemini_fallback_models() -> list[str]:
     raw = os.environ.get("GEMINI_FALLBACK_MODELS")
     raw = DEFAULT_GEMINI_FALLBACKS if raw is None else raw
     return [m.strip() for m in raw.split(",") if m.strip()]
-
-
-def enable_images() -> bool:
-    """Images are off for now (video-only MVP). Set ENABLE_IMAGES=1 to let Gemini plan image B-rolls."""
-    return os.environ.get("ENABLE_IMAGES", "").strip().lower() in {"1", "true", "yes"}
 
 
 def clamp_brolls(n: int) -> int:

@@ -14,7 +14,7 @@ from src.fileio import write_json_atomic
 from src.planning import pipeline as planning
 from src.planning import recommend
 from src.sfx import library as sfx_library
-from src.talkinghead import pipeline as talkinghead
+from src.audio_cleanup import pipeline as audio_cleanup
 from src.planning.layouts import LAYOUTS, STYLES, assign_layouts
 from src.planning.prompt import INTRO_SAFE_S
 from src.rendering import framing as framing_mod
@@ -125,7 +125,7 @@ def analyse(job_dir: Path, log: Callable[[str], None] = print) -> dict:
     if meta.get("clean_talking_head") and not meta.get("cleaned"):
         log("Cleaning the audio (noise, voice level)...")
         with perf.stage(job_dir, "cleanup"):
-            result = talkinghead.clean(job_dir, video, meta["language"], log=log)
+            result = audio_cleanup.clean(job_dir, video, meta["language"], log=log)
         write_json_atomic(job_dir / "transcript.json", result["transcript"])
         write_job_meta(job_dir, original_video=str(video), source_video=str(result["video"]), cleaned=True)
     elif not (job_dir / "transcript.json").is_file():
@@ -164,7 +164,7 @@ def _reset_derived(job_dir: Path) -> None:
 
 
 def set_cleanup(job_dir: Path, enabled: bool) -> None:
-    """Turn the talking-head cleanup on or off for a job that was only analysed. Turning it off after it ran goes
+    """Turn the audio cleanup on or off for a job that was only analysed. Turning it off after it ran goes
     back to the original video; either way the next `analyse` redoes the transcript."""
     meta = read_job_meta(job_dir)
     if bool(meta.get("clean_talking_head")) == bool(enabled):

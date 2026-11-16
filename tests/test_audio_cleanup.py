@@ -11,7 +11,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from src import config, workflow
-from src.talkinghead import denoise, pipeline, voice
+from src.audio_cleanup import denoise, pipeline, voice
 from src.transcription.audio import probe
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
@@ -232,7 +232,7 @@ def patch_workflow(monkeypatch):
         calls.transcribe += 1
         (job_dir / "transcript.json").write_text(json.dumps({"words": [W("raw", 0, 1)], "segments": [], "duration": 5.0,
                                                              "video_duration": 5.0}))
-    monkeypatch.setattr(workflow.talkinghead, "clean", clean)
+    monkeypatch.setattr(workflow.audio_cleanup, "clean", clean)
     monkeypatch.setattr(workflow.transcription, "run", transcribe)
     monkeypatch.setattr(workflow.recommend, "recommend_count", lambda t: {"count": 3, "reason": "r", "source": "fallback"})
     return calls

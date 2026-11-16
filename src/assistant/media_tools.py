@@ -1,5 +1,5 @@
-"""Chat tools that bring in pictures and clips: web image search, AI image generation, the user's attached pictures
-and videos, and pasted YouTube links, plus two that show things in the chat (the layout picker, slot previews). They are registered in tools.REGISTRY when this module is imported (tools.py
+"""Chat tools that bring in pictures and clips: the user's attached pictures and videos and pasted YouTube links,
+plus two that show things in the chat (the layout picker, slot previews). They are registered in tools.REGISTRY when this module is imported (tools.py
 does that at its end)."""
 from __future__ import annotations
 
@@ -92,41 +92,10 @@ def _tmp_clip(job: Path, suffix: str = ".mp4") -> Path:
 
 
 # ----------------------------------------------------------------------------- pictures
-@tool("search_web_images", "Search the web for pictures (people, places, memes, logos...). Shows small thumbnails "
-      "to the user, who can pick one. Returns ids like res_3 that place_image accepts.",
-      {"query": _p("string", "what to search for, e.g. 'Virat Kohli playing football'"),
-       "count": _p("integer", "how many results, 3 to 8 (default 6)")},
-      required=("query",), label=lambda a: "Searching the web for pictures")
-def _search_web_images(ctx: ToolContext, args: dict) -> dict:
-    try:
-        results = media.search_images(ctx.job, _str(args, "query"), int(_opt_num(args, "count") or media.SEARCH_COUNT))
-    except media.MediaError as exc:
-        raise ToolError(str(exc)) from None
-    ctx.cards.append({"type": "choices", "items": [
-        {"id": r["id"], "path": r["thumb"], "caption": f"{r['id']} · {r['domain']}"} for r in results]})
-    return {"results": [{k: r[k] for k in ("id", "title", "domain", "width", "height")} for r in results],
-            "note": "The user can see the thumbnails. If they said where to put one, pick the best match by title "
-                    "and place it; otherwise ask which one they like."}
-
-
-@tool("generate_image", "Create a new picture with AI from a description (vertical 9:16). The user sees it in the "
-      "chat; then use place_image with the returned id once they like it and say where. May be refused for real "
-      "people or unavailable on this account; then offer search_web_images.",
-      {"prompt": _p("string", "a detailed English description of the picture")},
-      required=("prompt",), label=lambda a: "Generating a picture")
-def _generate_image(ctx: ToolContext, args: dict) -> dict:
-    try:
-        out = media.generate_image(ctx.job, _str(args, "prompt"))
-    except media.MediaError as exc:
-        raise ToolError(str(exc)) from None
-    ctx.cards.append({"type": "image", "path": out["path"], "caption": out["id"]})
-    return {"image_id": out["id"], "note": "Shown to the user. Ask if they like it, or place it if they already said where."}
-
-
 @tool("place_image", "Put a picture on the video: either as a NEW slot (give start, optional end) or into an "
-      "EXISTING slot (give slot_id). `image` is att_N (the user's attached picture), res_N (a search result), gen_N "
-      "(a generated picture) or an image link. Fills the screen by default; layout pip makes it a small box.",
-      {"image": _p("string", "att_1, res_2, gen_3 or an http(s) image link"), **_PLACE},
+      "EXISTING slot (give slot_id). `image` is att_N (the picture the user attached). "
+      "Fills the screen by default; layout pip makes it a small box.",
+      {"image": _p("string", "the attached picture's id, e.g. att_1"), **_PLACE},
       required=("image",), mutating=True, clip_ids=_slot_ids, label=lambda a: "Placing the picture")
 def _place_image(ctx: ToolContext, args: dict) -> dict:
     slot_id, start, end = _target(ctx, args, DEFAULT_SLOT_S)

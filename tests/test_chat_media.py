@@ -1,5 +1,5 @@
-"""Chat media: safe fetching, web image search, image generation, YouTube clips, attached files and the place_* tools.
-Network, DDGS, Gemini and yt-dlp are mocked; FFmpeg runs for real on synthetic media."""
+"""Chat media: YouTube clips, attached files and the place_* tools.
+Network, Gemini and yt-dlp are mocked; FFmpeg runs for real on synthetic media."""
 import io
 import json
 import shutil
@@ -12,7 +12,7 @@ from google.genai import errors, types
 from PIL import Image
 
 from src import workflow
-from src.assistant import assets, fetch, media, snapshots, tools, ytclip
+from src.assistant import assets, media, snapshots, tools, ytclip
 from src.assistant.tools import Attachment, ToolContext, run_tool
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
@@ -50,213 +50,20 @@ def ctx_for(job, *atts):
     return ToolContext(job=job, attachments={a.id: a for a in atts})
 
 
-# ----------------------------------------------------------------------------- safe fetching
-@pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.5", "192.168.1.9", "169.254.169.254", "::1", "0.0.0.0"])
-def test_private_and_local_addresses_are_refused(monkeypatch, ip):
-    fam = 10 if ":" in ip else 2
-    monkeypatch.setattr(fetch.socket, "getaddrinfo", lambda *a, **k: [(fam, 1, 6, "", (ip, 80))])
-    with pytest.raises(fetch.FetchError, match="private or local"):
-        fetch.check_url("http://evil.example/pic.png")
-
-
-@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://x.com/a.png", "javascript:alert(1)", "", "http://"])
-def test_only_http_links_are_accepted(url):
-    with pytest.raises(fetch.FetchError):
-        fetch.check_url(url)
-
-
-def test_a_public_address_passes(monkeypatch):
-    monkeypatch.setattr(fetch.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 443))])
-    assert fetch.check_url("https://example.com/a.png") == "https://example.com/a.png"
-
-
-class FakeResp:
-    def __init__(self, status=200, headers=None, body=b"", redirect=None):
-        self.status_code, self.body = status, body
-        self.headers = {"Content-Type": "image/png", **(headers or {})}
-        if redirect:
-            self.headers["Location"] = redirect
-        self.is_redirect = bool(redirect)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def iter_content(self, n):
-        for i in range(0, len(self.body), n):
-            yield self.body[i:i + n]
-
-
-def patch_requests(monkeypatch, responses):
-    import requests
-
-    seen = []
-    monkeypatch.setattr(fetch.socket, "getaddrinfo", lambda host, *a, **k: [(2, 1, 6, "", (
-        "10.0.0.1" if host == "internal.local" else "93.184.216.34", 80))])
-
-    def fake_get(url, **kw):
-        seen.append(url)
-        assert kw["allow_redirects"] is False  # redirects are followed by hand, each one re-checked
-        return responses.pop(0)
-
-    monkeypatch.setattr(requests, "get", fake_get)
-    return seen
-
-
-def test_fetch_returns_the_bytes_and_follows_redirects_safely(monkeypatch):
-    seen = patch_requests(monkeypatch, [FakeResp(302, redirect="/real.png"), FakeResp(body=b"PNGDATA")])
-    assert fetch.fetch_image("http://example.com/a") == b"PNGDATA"
-    assert seen == ["http://example.com/a", "http://example.com/real.png"]
-
-
-def test_a_redirect_to_a_private_host_is_blocked(monkeypatch):
-    patch_requests(monkeypatch, [FakeResp(302, redirect="http://internal.local/secret.png")])
-    with pytest.raises(fetch.FetchError, match="private or local"):
-        fetch.fetch_image("http://example.com/a")
-
-
-def test_fetch_rejects_pages_big_files_errors_and_redirect_loops(monkeypatch):
-    patch_requests(monkeypatch, [FakeResp(headers={"Content-Type": "text/html"}, body=b"<html>")])
-    with pytest.raises(fetch.FetchError, match="not a picture"):
-        fetch.fetch_image("http://example.com/page")
-    patch_requests(monkeypatch, [FakeResp(headers={"Content-Length": str(99 * 1024 * 1024)})])
-    with pytest.raises(fetch.FetchError, match="too big"):
-        fetch.fetch_image("http://example.com/huge.png")
-    patch_requests(monkeypatch, [FakeResp(body=b"x" * 5000)])
-    with pytest.raises(fetch.FetchError, match="too big"):
-        fetch.fetch_image("http://example.com/lying.png", max_bytes=1000)  # no Content-Length: counted while reading
-    patch_requests(monkeypatch, [FakeResp(404)])
-    with pytest.raises(fetch.FetchError, match="404"):
-        fetch.fetch_image("http://example.com/gone.png")
-    patch_requests(monkeypatch, [FakeResp(302, redirect="/a") for _ in range(10)])
-    with pytest.raises(fetch.FetchError, match="Too many redirects"):
-        fetch.fetch_image("http://example.com/loop")
-
-
-# ----------------------------------------------------------------------------- web image search
-def patch_search(monkeypatch, rows, fetch_ok=True):
-    import ddgs
-
-    monkeypatch.setattr(ddgs, "DDGS", lambda **kw: SimpleNamespace(images=lambda q, **k: rows))
-    monkeypatch.setattr(fetch, "fetch_image", lambda url, max_bytes=0: png_bytes() if fetch_ok and "bad" not in url
-                        else (_ for _ in ()).throw(fetch.FetchError("dead")))
-
-
-ROWS = [{"title": f"Kohli {i}", "image": f"https://img{i}.example/k{i}.jpg", "thumbnail": f"https://t{i}.example/t.jpg",
-         "url": f"https://www.site{i}.com/page", "width": 800, "height": 600} for i in range(1, 5)]
-
-
-def test_search_downloads_thumbnails_and_remembers_the_full_urls(tmp_path, monkeypatch):
-    job = make_job(tmp_path)
-    patch_search(monkeypatch, ROWS)
-    out = media.search_images(job, "kohli football", count=3)
-    assert [r["id"] for r in out] == ["res_1", "res_2", "res_3"] and out[0]["domain"] == "site1.com"
-    assert (job / out[0]["thumb"]).is_file() and Image.open(job / out[0]["thumb"]).size[0] <= media.THUMB_SIDE
-    reg = json.loads((job / "assets" / "candidates.json").read_text())
-    assert reg["res_2"]["url"] == "https://img2.example/k2.jpg"
-    again = media.search_images(job, "more kohli", count=2)  # ids keep counting up, never reuse
-    assert [r["id"] for r in again] == ["res_4", "res_5"]
-
-
-def test_search_skips_dead_thumbnails_and_reports_no_results(tmp_path, monkeypatch):
-    job = make_job(tmp_path)
-    rows = [{**ROWS[0], "thumbnail": "https://bad.example/t.jpg"}, ROWS[1]]
-    patch_search(monkeypatch, rows)
-    assert [r["title"] for r in media.search_images(job, "x")] == ["Kohli 2"]
-    patch_search(monkeypatch, [])
-    with pytest.raises(media.MediaError, match="No pictures found"):
-        media.search_images(job, "nothing")
-    patch_search(monkeypatch, [{**ROWS[0], "thumbnail": "https://bad.example/t.jpg"}])
-    with pytest.raises(media.MediaError, match="could not be loaded"):
-        media.search_images(job, "x")
-
-
-def test_search_errors_become_friendly_messages(tmp_path, monkeypatch):
-    import ddgs
-
-    def boom(**kw):
-        raise RuntimeError("ratelimit")
-
-    monkeypatch.setattr(ddgs, "DDGS", boom)
-    with pytest.raises(media.MediaError, match="Image search failed"):
-        media.search_images(make_job(tmp_path), "x")
-
-
-# ----------------------------------------------------------------------------- image generation
-class FakeImageModels:
-    def __init__(self, *script):
-        self.script, self.calls = list(script), []
-
-    def generate_content(self, model, contents, config):
-        self.calls.append((model, contents, config))
-        step = self.script.pop(0)
-        if isinstance(step, Exception):
-            raise step
-        return step
-
-
-def image_response(data=None):
-    parts = [types.Part(inline_data=types.Blob(data=data, mime_type="image/png"))] if data else [types.Part(text="no")]
-    return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=parts))])
-
-
-def test_generated_image_is_saved_and_numbered(tmp_path):
-    job = make_job(tmp_path)
-    client = SimpleNamespace(models=FakeImageModels(image_response(png_bytes("red")), image_response(png_bytes())))
-    out = media.generate_image(job, "  a red   cricket ball ", client=client, models=["m"])
-    assert out == {"id": "gen_1", "path": "assets/gen_1.png"} and (job / out["path"]).is_file()
-    assert client.models.calls[0][1] == "a red cricket ball"
-    assert client.models.calls[0][2].image_config.aspect_ratio == "9:16"
-    assert media.generate_image(job, "again", client=client, models=["m"])["id"] == "gen_2"
-
-
-def test_generation_falls_back_between_models_and_explains_failures(tmp_path):
-    job = make_job(tmp_path)
-    quota = errors.ClientError(429, {"error": {"message": "RESOURCE_EXHAUSTED"}})
-    client = SimpleNamespace(models=FakeImageModels(quota, image_response(png_bytes())))
-    assert media.generate_image(job, "x", client=client, models=["a", "b"])["id"] == "gen_1"
-    client = SimpleNamespace(models=FakeImageModels(quota, quota))
-    with pytest.raises(media.MediaError, match="billing-enabled"):
-        media.generate_image(job, "x", client=client, models=["a", "b"])
-    client = SimpleNamespace(models=FakeImageModels(image_response(None)))
-    with pytest.raises(media.MediaError, match="wouldn't make that picture"):
-        media.generate_image(job, "a real celebrity", client=client, models=["a"])
-    with pytest.raises(media.MediaError, match="Tell me what"):
-        media.generate_image(job, "  ", client=client)
-    assert [f.name for f in (job / "assets").glob("gen_*")] == ["gen_1.png"]  # failures saved nothing more
-
-
-def test_image_model_chain_prefers_the_env_choice(monkeypatch):
-    monkeypatch.delenv("GEMINI_IMAGE_MODEL", raising=False)
-    assert media.image_model_chain()[0] == "gemini-3.1-flash-lite-image"
-    monkeypatch.setenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
-    chain = media.image_model_chain()
-    assert chain[0] == "gemini-2.5-flash-image" and len(chain) == len(set(chain)) == 3
-
-
 # ----------------------------------------------------------------------------- resolving references
-def test_resolve_image_handles_every_kind_of_reference(tmp_path, monkeypatch):
+def test_resolve_image_finds_the_attached_picture(tmp_path):
     job = make_job(tmp_path)
     att = assets.save_attachment(job, "mine.png", png_bytes())
-    ctx = ctx_for(job, att)
-    path, extra = media.resolve_image(job, ctx, "att_1")
+    path, extra = media.resolve_image(job, ctx_for(job, att), "att_1")
     assert path == att.path and extra == {"origin": "attachment", "title": "mine.png"}
-    patch_search(monkeypatch, ROWS)
-    media.search_images(job, "k", count=2)
-    monkeypatch.setattr(fetch, "fetch_image", lambda url, max_bytes=0: png_bytes())
-    path, extra = media.resolve_image(job, ctx, "res_1")
-    assert path.is_file() and extra["credit"] == "Image: site1.com" and extra["origin"] == "web"
-    path, extra = media.resolve_image(job, ctx, "https://www.example.org/pic.jpg")
-    assert extra["credit"] == "Image: example.org" and path.name.startswith("url_")
-    gen = assets.assets_dir(job) / "gen_1.png"
-    gen.write_bytes(png_bytes())
-    assert media.resolve_image(job, ctx, "gen_1")[1]["origin"] == "generated"
+    # a fresh chat turn (new ToolContext) still finds it on disk
+    assert media.resolve_image(job, ctx_for(job), "att_1")[0] == att.path
 
 
-@pytest.mark.parametrize("ref", ["att_9", "res_7", "gen_4", "../etc/passwd", "file:///c:/x.png", "att_1/../x", ""])
-def test_resolve_image_rejects_bad_references(tmp_path, ref):
+@pytest.mark.parametrize("ref", ["att_9", "res_7", "gen_4", "url_1", "../etc/passwd", "file:///c:/x.png",
+                                 "https://example.com/a.png", "att_1/../x", ""])
+def test_resolve_image_rejects_everything_but_attachments(tmp_path, ref):
+    """Web links and res_/gen_ ids went away with web search and AI generation: only attachments are accepted."""
     job = make_job(tmp_path)
     with pytest.raises(tools.ToolError):
         media.resolve_image(job, ctx_for(job), ref)
@@ -354,22 +161,6 @@ def test_place_image_into_an_existing_slot_keeps_its_time_and_layout(tmp_path):
     assert out["ok"] and (out["slot"]["start"], out["slot"]["layout"], out["slot"]["kind"]) == (14.0, "split", "image")
     run_tool(ctx_for(job), "undo", {})
     assert (job / "clips" / "clip_02.mp4").read_bytes() == b"clip-2" and slot(job, 2)["asset_type"] == "video"
-
-
-@needs_ffmpeg
-def test_web_picture_gets_a_credit_line(tmp_path, monkeypatch):
-    job = make_job(tmp_path)
-    patch_search(monkeypatch, ROWS)
-    found = run_tool(ctx_for(job), "search_web_images", {"query": "kohli"})
-    assert [r["id"] for r in found["results"]][:2] == ["res_1", "res_2"]
-    ctx = ctx_for(job)
-    assert ctx.cards == []  # cards belong to the context that ran the search
-    c = ctx_for(job)
-    run_tool(c, "search_web_images", {"query": "kohli again", "count": 3})
-    assert c.cards[0]["type"] == "choices" and c.cards[0]["items"][0]["caption"].startswith("res_5")
-    monkeypatch.setattr(fetch, "fetch_image", lambda url, max_bytes=0: png_bytes())
-    out = run_tool(ctx_for(job), "place_image", {"image": "res_2", "start": 20.0, "end": 23.0})
-    assert out["ok"] and slot(job, 3)["asset"]["credit"] == "Image: site2.com"
 
 
 @needs_ffmpeg
@@ -520,29 +311,12 @@ def test_youtube_clip_errors_are_plain_and_change_nothing(tmp_path, monkeypatch)
 
 
 def test_every_media_tool_is_registered_and_declared():
-    for name in ("search_web_images", "generate_image", "place_image", "place_video_file", "place_youtube_clip"):
+    for name in ("place_image", "place_video_file", "place_youtube_clip"):
         assert name in tools.REGISTRY
+    assert "search_web_images" not in tools.REGISTRY and "generate_image" not in tools.REGISTRY  # removed on purpose
     assert {d.name for d in tools.declarations()} == set(tools.REGISTRY)
     for name in ("place_image", "place_video_file", "place_youtube_clip"):
         assert tools.REGISTRY[name].mutating
-
-
-def test_generate_image_tool_shows_the_picture_and_reports_failures(tmp_path, monkeypatch):
-    job = make_job(tmp_path)
-    def fake_generate(j, p):
-        (assets.assets_dir(j) / "gen_1.png").write_bytes(png_bytes())
-        return {"id": "gen_1", "path": "assets/gen_1.png"}
-
-    monkeypatch.setattr(media, "generate_image", fake_generate)
-    ctx = ctx_for(job)
-    assert run_tool(ctx, "generate_image", {"prompt": "a bat"})["image_id"] == "gen_1"
-    assert ctx.cards == [{"type": "image", "path": "assets/gen_1.png", "caption": "gen_1"}]
-
-    def refuse(j, p):
-        raise media.MediaError("Gemini wouldn't make that picture. I can search the web instead.")
-
-    monkeypatch.setattr(media, "generate_image", refuse)
-    assert "search the web" in run_tool(ctx_for(job), "generate_image", {"prompt": "lebron"})["error"]
 
 
 def test_cleanup_removes_assets_but_the_chat_survives(tmp_path):

@@ -1,8 +1,8 @@
 streamlit
 groq
 google-genai
+pydantic
 yt-dlp
-ddgs
 requests
 python-dotenv
 Pillow

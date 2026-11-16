@@ -119,32 +119,20 @@ def test_layout_picker_shows_three_tappable_examples_and_tapping_sends_a_message
     assert [m["role"] for m in store.load(job)][-2:] == ["user", "assistant"]
 
 
-def test_search_results_show_thumbnails_with_use_buttons_and_missing_files_are_skipped(tmp_path, monkeypatch):
+def test_old_chats_with_search_result_cards_and_purged_pictures_still_open(tmp_path, monkeypatch):
+    """Web image search was removed, but chat.json files saved before that hold 'choices' cards (and pictures that a
+    render purged). They must be skipped quietly, not crash the chat."""
     monkeypatch.setenv("VIBECROP_WORKDIR", str(tmp_path))
     job = make_job(tmp_path)
-    a = assets.assets_dir(job)
-    for n in (1, 2):
-        Image.new("RGB", (80, 60), "blue").save(a / f"res_{n}_thumb.jpg")
-    cards = [{"type": "choices", "items": [
-        {"id": f"res_{n}", "path": f"assets/res_{n}_thumb.jpg", "caption": f"res_{n} · site.com"} for n in (1, 2, 3)]},
-        {"type": "image", "path": "assets/gone.png", "caption": "purged after a render"}]
+    cards = [{"type": "choices", "items": [{"id": "res_1", "path": "assets/res_1_thumb.jpg", "caption": "res_1"}]},
+             {"type": "image", "path": "assets/gone.png", "caption": "purged after a render"}]
     (job / "chat.json").write_text(json.dumps([{"role": "assistant", "text": "Found these", "cards": cards}]))
     at = AppTest.from_file(APP, default_timeout=30)
     at.session_state["job_dir"] = str(job)
     at.session_state["chat_open"] = True
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    use = [b for b in at.button if b.key and b.key.startswith("use_")]
-    assert [b.key.rsplit("_", 2)[1] + "_" + b.key.rsplit("_", 1)[1] for b in use] == ["res_1", "res_2"]  # res_3 had no file
-    seen = {}
-
-    def fake_stream(job_, history, text_, attachments=None, **kw):
-        seen["text"] = text_
-        yield {"type": "done", "text": "placed", "changed": False, "cards": []}
-
-    monkeypatch.setattr(agent, "stream_turn", fake_stream)
-    use[1].click().run()
-    assert seen["text"] == "Use res_2"
+    assert not [b for b in at.button if b.key and b.key.startswith("use_")]
 
 
 def test_cards_from_a_live_turn_are_shown_and_saved_with_the_message(tmp_path, monkeypatch):

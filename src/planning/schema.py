@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 
 class BRollItem(BaseModel):
-    asset_type: Literal["video", "image"]
+    asset_type: Literal["video"] = "video"  # the planner only plans video; pictures are added by the user
     timestamp_start: float  # seconds
     timestamp_end: float  # seconds
     search_query: str  # ONE English query, 3-6 plain words (the user can edit it in the UI)

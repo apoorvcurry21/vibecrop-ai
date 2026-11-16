@@ -34,7 +34,7 @@ def _is_dark() -> bool:
 
 
 def _render_cards(job: Path, cards: list[dict], key: str = "live") -> None:
-    """Pictures the assistant shows: one generated/attached image, or a row of search results with a Use button."""
+    """Things the assistant shows in the chat: a slot preview, a sound, the layout picker."""
     for ci, card in enumerate(cards or []):
         if card.get("type") == "image" and (job / card.get("path", "x")).is_file():
             st.image(str(job / card["path"]), caption=card.get("caption"), width=220)
@@ -45,14 +45,6 @@ def _render_cards(job: Path, cards: list[dict], key: str = "live") -> None:
                 st.audio(str(library.path_of(entry)))
         elif card.get("type") == "layouts":
             _render_layouts(card, key, ci)
-        elif card.get("type") == "choices":
-            items = [i for i in card.get("items", []) if (job / i.get("path", "x")).is_file()]
-            for row in range(0, len(items), 3):
-                for col, item in zip(st.columns(3), items[row:row + 3]):
-                    with col:
-                        st.image(str(job / item["path"]), caption=item.get("caption"), width="stretch")
-                        col.button("Use this", key=f"use_{key}_{ci}_{item['id']}", on_click=_suggest,
-                                   args=(f"Use {item['id']}",), width="stretch")
 
 
 def _render_layouts(card: dict, key: str, ci: int) -> None:

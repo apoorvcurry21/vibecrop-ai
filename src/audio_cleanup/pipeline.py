@@ -1,4 +1,4 @@
-"""Talking-head cleanup: raw video -> a video with clean audio (+ its transcript) that becomes the job's source.
+"""Audio cleanup: raw video -> a video with clean audio (+ its transcript) that becomes the job's source.
 
     1. extract the audio, remove background noise (arnndn)
     2. transcribe the DENOISED audio with Groq Whisper (cleaner audio = better words and timestamps)
@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from src import config, perf
 from src.rendering.compose import video_encoder_args
-from src.talkinghead import denoise, voice
+from src.audio_cleanup import denoise, voice
 from src.transcription.audio import AudioExtractionError, extract_audio, probe
 
 REPORT_NAME = "cleanup_report.json"
