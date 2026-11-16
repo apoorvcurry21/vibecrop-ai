@@ -423,7 +423,7 @@ def test_chat_model_chain_prefers_the_fast_model_and_never_repeats(monkeypatch):
     monkeypatch.delenv("GEMINI_CHAT_MODEL", raising=False)
     monkeypatch.setenv("GEMINI_MODEL", "big")
     monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "small,big")
-    assert config.chat_model_chain() == ["gemini-3.1-flash-lite", "big", "small"]
+    assert config.chat_model_chain() == ["gemini-3.5-flash-lite", "big", "small"]
     monkeypatch.setenv("GEMINI_CHAT_MODEL", "big")
     assert config.chat_model_chain() == ["big", "small"]
 

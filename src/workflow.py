@@ -10,6 +10,7 @@ from typing import Callable
 from src import config, perf
 from src.captions import styles as caption_styles
 from src.cleanup import purge_job_temp
+from src.fileio import write_json_atomic
 from src.planning import pipeline as planning
 from src.planning import recommend
 from src.sfx import library as sfx_library
@@ -62,7 +63,7 @@ def read_job_meta(job_dir: Path) -> dict:
 
 def write_job_meta(job_dir: Path, **fields) -> dict:
     meta = {**read_job_meta(job_dir), **fields}
-    (job_dir / "job.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(job_dir / "job.json", meta)
     return meta
 
 
@@ -125,8 +126,7 @@ def analyse(job_dir: Path, log: Callable[[str], None] = print) -> dict:
         log("Cleaning the audio (noise, voice level)...")
         with perf.stage(job_dir, "cleanup"):
             result = talkinghead.clean(job_dir, video, meta["language"], log=log)
-        (job_dir / "transcript.json").write_text(json.dumps(result["transcript"], ensure_ascii=False, indent=2),
-                                                 encoding="utf-8")
+        write_json_atomic(job_dir / "transcript.json", result["transcript"])
         write_job_meta(job_dir, original_video=str(video), source_video=str(result["video"]), cleaned=True)
     elif not (job_dir / "transcript.json").is_file():
         log("Transcribing audio with Groq Whisper...")
@@ -160,7 +160,7 @@ def _reset_derived(job_dir: Path) -> None:
     meta = read_job_meta(job_dir)
     for key in ("suggested_brolls", "suggested_reason", "suggested_source"):
         meta.pop(key, None)
-    (job_dir / "job.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(job_dir / "job.json", meta)
 
 
 def set_cleanup(job_dir: Path, enabled: bool) -> None:
@@ -246,7 +246,7 @@ def load_plan(job_dir: Path) -> dict:
 
 
 def _save(job_dir: Path, plan: dict) -> None:
-    (job_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(job_dir / "plan.json", plan)
 
 
 def _item(plan: dict, item_id: int) -> dict:

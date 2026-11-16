@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src import config
+from src.fileio import write_json_atomic
 from src.planning.gemini_planner import PlanningError, plan
 
 
@@ -24,7 +25,7 @@ def run(transcript_path: str | Path, total: int | None = None, model: str | None
     result = plan(transcript, total=total, model=model, client=client, notes=notes, style=style)
     result["source_transcript"] = transcript_path.name
     out = transcript_path.parent / "plan.json"
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(out, result)
     return out
 
 

@@ -245,8 +245,8 @@ Edits apply instantly and **Undo** (top of the panel, or just say "undo") revert
 replaced clips. The chat history is saved per job in `chat.json` (a few KB); attached/generated pictures and undo
 snapshots are temporary and deleted with the other temp files after a render.
 
-The chat uses `GEMINI_CHAT_MODEL` (default `gemini-3.1-flash-lite`, about 3 s per step; `gemini-3.5-flash` is
-smarter but takes 10-20 s) and gives up on a stalled model after 30 s, then tries the next one.
+The chat uses `GEMINI_CHAT_MODEL` (default `gemini-3.5-flash-lite`, about 2 s per step when measured; `gemini-3.1-flash-lite`
+took 5-14 s and `gemini-3.5-flash` 10-20 s) and gives up on a stalled model after 30 s, then tries the next one.
 
 > **Image generation needs a billing-enabled Gemini key.** On the free tier every Gemini image model answers
 > "quota exceeded"; the assistant then says so and offers a web image search instead. Set `GEMINI_IMAGE_MODEL` to

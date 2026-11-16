@@ -60,7 +60,9 @@ def gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL
 
 
-DEFAULT_CHAT_MODEL = "gemini-3.1-flash-lite"  # measured ~3 s per round vs 10-20 s for gemini-3.5-flash
+# Measured 2026-11-16 on the same turns: gemini-3.5-flash-lite answers in ~2 s; gemini-3.1-flash-lite took 5-14 s (and
+# once timed out); gemini-3.5-flash is 10-20 s. The next models in the chain are only used if this one fails.
+DEFAULT_CHAT_MODEL = "gemini-3.5-flash-lite"
 
 
 def chat_model_chain() -> list[str]:

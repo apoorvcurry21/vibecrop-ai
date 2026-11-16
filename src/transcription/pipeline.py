@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src import config
+from src.fileio import write_json_atomic
 from src.transcription.audio import AudioExtractionError, extract_audio, probe
 from src.transcription.groq_whisper import TranscriptionError, transcribe
 
@@ -36,7 +37,7 @@ def run(video_path: str | Path, language: str, job_dir: Path | None = None,
     transcript["video_duration"] = round(info["duration"], 3)
 
     out = job_dir / "transcript.json"
-    out.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(out, transcript)
     return out
 
 

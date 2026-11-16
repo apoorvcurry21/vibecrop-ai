@@ -9,7 +9,8 @@ from src.config import require_binary
 
 STILL_SECONDS = 10.0  # long enough for any slot; a static clip this long is a few hundred KB
 MAX_SIDE = 2160  # keeps zoom (up to 3x) sharp without huge files
-FPS = 30
+FPS = 2  # a still never changes, so 2 stored frames per second is enough; the render resamples every clip to the
+# output frame rate anyway (framing.clip_filter starts with fps=). Measured: 30 fps took 11 s to encode, 2 fps 1.3 s.
 
 
 class StillError(RuntimeError):

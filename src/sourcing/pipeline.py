@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from src import config
+from src.fileio import write_json_atomic
 from src.sourcing.youtube import SourcingError, source_video_clip
 
 
@@ -64,7 +65,7 @@ def run(job_dir: str | Path, only: list[int] | None = None, force: bool = False,
                 log(f"[{item['id']:>2}] ok  {a['channel']} - {a['title'][:60]} @ {a['window_start']}s")
             else:
                 log(f"[{item['id']:>2}] FAILED: {a.get('error')}")
-            plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")  # save as we go
+            write_json_atomic(plan_path, plan)  # save as we go
     return plan_path
 
 

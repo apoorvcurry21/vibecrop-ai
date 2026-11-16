@@ -151,6 +151,35 @@ def test_image_becomes_an_even_sized_still_clip(tmp_path):
     assert abs(float(got) - 2.0) < 0.2
 
 
+@needs_ffmpeg
+def test_still_clip_is_stored_at_low_fps_but_renders_at_full_fps_and_seeks(tmp_path):
+    """The 2 fps still is 8x cheaper to encode; the render's fps filter must still give a smooth 30 fps clip, and a
+    slot that starts deep inside the still (-ss) must work."""
+    from PIL import Image
+    from src.rendering.framing import clip_filter
+
+    img = tmp_path / "pic.png"
+    Image.new("RGB", (640, 480), (200, 40, 40)).save(img)
+    clip = tmp_path / "still.mp4"
+    image_to_clip(img, clip, seconds=10.0)
+
+    def probe(path, entry):
+        return subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", entry,
+                               "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout.strip()
+
+    assert probe(clip, "stream=avg_frame_rate") == "2/1"
+    out = tmp_path / "slot.mp4"
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-ss", "6", "-t", "2", "-i", str(clip),
+                        "-vf", clip_filter(None, 2.0, 1080, 1920), "-an", "-pix_fmt", "yuv420p", str(out)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert probe(out, "stream=width,height") == "1080,1920"
+    frames = int(subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                                 "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(out)],
+                                capture_output=True, text=True).stdout.strip())
+    assert 58 <= frames <= 62  # 2 s at 30 fps
+
+
 def test_non_images_are_rejected(tmp_path):
     bad = tmp_path / "x.png"
     bad.write_bytes(b"not an image")
