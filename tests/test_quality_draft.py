@@ -63,10 +63,7 @@ def test_snap_fps_rounds_to_a_whole_rate_between_24_and_60(value, want):
     assert snap_fps(value) == want
 
 
-def test_bitrate_cap_follows_the_source_with_a_floor_and_audio_stays_good():
-    assert SourceProfile(60, 28000, 256).maxrate_kbps == 28000  # never more than the source had
-    assert SourceProfile(30, 3000, 128).maxrate_kbps == 8000  # a poor source is not squeezed further
-    assert SourceProfile(30, 0, 0).maxrate_kbps == 16000  # unknown rate: a generous cap
+def test_export_audio_bitrate_follows_the_source_within_limits():
     assert [SourceProfile(30, 0, k).out_audio_kbps for k in (0, 128, 256, 640)] == [192, 192, 256, 320]
 
 
@@ -91,16 +88,32 @@ def test_export_keeps_60_fps_and_the_voice_sample_rate(tmp_path):
 
 
 @needs_ffmpeg
-def test_export_never_goes_over_the_bitrate_cap(tmp_path):
-    main = speaker(tmp_path / "noisy.mp4", 60, seconds=2, noisy=True)
-    free = int(info(render(main, [], tmp_path / "free.mp4", fps=60, crf=17))["bit_rate"]) / 1000
-    capped_out = render(main, [], tmp_path / "capped.mp4", fps=60, crf=17, maxrate_kbps=3000)
-    capped = int(info(capped_out)["bit_rate"]) / 1000
-    assert free > 6000  # the noisy picture at CRF 17 really wants far more than the cap...
-    assert capped < free * 0.6  # ...and the cap holds it down
-    # the rate buffer (2 x cap) can be spent once at the start, so a 2 s clip may exceed the cap by buffer / duration
-    assert capped <= 3000 + 2 * 3000 / 2 + 300
-    assert info(capped_out)["fps"] == pytest.approx(60, abs=0.5)
+def test_export_aims_for_the_target_bitrate_even_when_crf_would_give_less(tmp_path):
+    main = speaker(tmp_path / "plain.mp4", 60, seconds=2, size="540x960")  # a small, calm picture
+    crf_only = int(info(render(main, [], tmp_path / "crf.mp4", fps=60, crf=17))["bit_rate"]) / 1000
+    target = 20000
+    out = render(main, [], tmp_path / "target.mp4", fps=60, crf=17, bitrate_kbps=target)
+    got = int(info(out)["bit_rate"]) / 1000
+    assert crf_only < target * 0.5  # a clean picture at CRF 17 needs far less than the target...
+    assert target * 0.6 <= got <= target * 1.3  # ...but the target makes the export use it
+    assert info(out)["fps"] == pytest.approx(60, abs=0.5)
+
+
+@needs_ffmpeg
+def test_final_export_asks_for_25_mbps_and_the_draft_does_not(tmp_path, monkeypatch):
+    assert compose.EXPORT_KBPS == 25000
+    seen = []
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("bitrate_kbps"))
+        return render(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "render", spy)
+    main = speaker(tmp_path / "main.mp4", 30, seconds=2)
+    job = make_job(tmp_path, main)
+    pipeline.run(job, main, log=lambda m: None, draft=True)
+    pipeline.run(job, main, log=lambda m: None)
+    assert seen == [None, 25000]  # draft first (no target), then the final export
 
 
 @needs_ffmpeg

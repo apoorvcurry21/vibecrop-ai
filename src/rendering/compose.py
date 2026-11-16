@@ -65,23 +65,18 @@ class Sound:
 
 
 AUDIO_RATE = 48000  # the usual rate of phone/camera video: mixing sound effects must not downsample the voice
-EXPORT_CRF = 17  # near-transparent for a re-encode; the bitrate cap below keeps it from growing past the source
-MIN_CAP_KBPS, UNKNOWN_CAP_KBPS = 8000, 16000  # cap floor for low-bitrate sources / cap when the source rate is unknown
+EXPORT_CRF = 17  # only used by the other callers; the final export aims for EXPORT_KBPS instead
+EXPORT_KBPS = 25000  # target video bitrate of the final export (25 Mbps), whatever the source's bitrate was
 MIN_AUDIO_KBPS, MAX_AUDIO_KBPS = 192, 320
 MIN_FPS, MAX_FPS = 24, 60
 
 
 @dataclass
 class SourceProfile:
-    """What the speaker video looks like, so the export can keep its frame rate and not go below its quality."""
+    """What the speaker video looks like, so the export can keep its frame rate and audio quality."""
     fps: int = FPS
     video_kbps: int = 0  # 0 = unknown
     audio_kbps: int = 0
-
-    @property
-    def maxrate_kbps(self) -> int:
-        """Bitrate ceiling for the export: the source's own video bitrate (never more), but not below a floor."""
-        return max(self.video_kbps or UNKNOWN_CAP_KBPS, MIN_CAP_KBPS)
 
     @property
     def out_audio_kbps(self) -> int:
@@ -260,15 +255,15 @@ def nvenc_available() -> bool:
         return False
 
 
-def video_encoder_args(preset: str, crf: int, hw: bool = False, maxrate_kbps: int | None = None) -> list[str]:
+def video_encoder_args(preset: str, crf: int, hw: bool = False, bitrate_kbps: int | None = None) -> list[str]:
     """libx264 by default. With `hw=True` and VIBECROP_ENCODER=auto|nvenc, the NVIDIA encoder if it really works.
-    `maxrate_kbps` caps the bitrate (quality still comes from the CRF / CQ; the cap only stops it growing past it)."""
-    cap = ["-maxrate", f"{maxrate_kbps}k", "-bufsize", f"{2 * maxrate_kbps}k"] if maxrate_kbps else []
+    `bitrate_kbps` sets a target video bitrate (the export aims for it); without it the quality comes from CRF / CQ."""
+    rate = ["-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps}k", "-bufsize", f"{2 * bitrate_kbps}k"] if bitrate_kbps else []
     pref = config.video_encoder_pref()
     if hw and pref != "cpu" and nvenc_available():
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(crf + 1), "-b:v", "0", *cap,
-                "-pix_fmt", "yuv420p"]
-    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), *cap, "-pix_fmt", "yuv420p"]
+        quality = rate or ["-cq", str(crf + 1), "-b:v", "0"]
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", *quality, "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", preset, *(rate or ["-crf", str(crf)]), "-pix_fmt", "yuv420p"]
 
 
 def probe_duration(path: Path) -> float:
@@ -316,14 +311,14 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
            subtitles_file: str | None = None, cwd: Path | None = None,
            face_y: float = DEFAULT_FACE_Y, preset: str = "veryfast", crf: int = 20,
            progress: Callable[[float], None] | None = None, hw: bool = False,
-           sounds: list[Sound] | None = None, fps: int = FPS, maxrate_kbps: int | None = None,
+           sounds: list[Sound] | None = None, fps: int = FPS, bitrate_kbps: int | None = None,
            audio_kbps: int = 192, scale_to: tuple[int, int] | None = None) -> Path:
     """Render the final video. Only the main video's audio is used: B-roll audio is never mapped.
 
     `subtitles_file` must be relative to `cwd` (avoids Windows drive-letter escaping in filters).
     `progress(fraction)` is called while ffmpeg runs; `hw=True` allows the GPU encoder (final export only).
     `sounds` are sound effects mixed into the speaker's audio (see build_audio_graph).
-    `fps`, `maxrate_kbps` and `audio_kbps` let the export follow the source video (see `probe_profile`);
+    `fps` and `audio_kbps` let the export follow the source video (see `probe_profile`); `bitrate_kbps` is its video target;
     `scale_to` shrinks the finished frame (draft previews).
     """
     ffmpeg = require_binary("ffmpeg")
@@ -345,7 +340,7 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
     cmd += [
         "-filter_complex", graph,
         "-map", "[v]", *audio_map,
-        *video_encoder_args(preset, crf, hw, maxrate_kbps),
+        *video_encoder_args(preset, crf, hw, bitrate_kbps),
         "-c:a", "aac", "-b:a", f"{audio_kbps}k", "-movflags", "+faststart",
         str(out_path),
     ]

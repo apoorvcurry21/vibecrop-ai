@@ -110,13 +110,17 @@ def test_encoder_defaults_to_the_cpu_and_uses_nvenc_only_when_allowed(monkeypatc
     assert "libx264" in video_encoder_args("veryfast", 20, hw=True)  # asked for the GPU, but there is none
 
 
-def test_the_bitrate_cap_goes_to_both_encoders_and_is_absent_without_one(monkeypatch):
+def test_the_target_bitrate_goes_to_both_encoders_instead_of_crf_and_is_absent_without_one(monkeypatch):
     monkeypatch.setattr(compose, "nvenc_available", lambda: True)
     monkeypatch.setenv("VIBECROP_ENCODER", "auto")
     for hw in (False, True):
-        a = video_encoder_args("veryfast", 17, hw=hw, maxrate_kbps=20000)
-        assert a[a.index("-maxrate") + 1] == "20000k" and a[a.index("-bufsize") + 1] == "40000k"
-    assert "-maxrate" not in video_encoder_args("veryfast", 20) and "-maxrate" not in video_encoder_args("veryfast", 20, hw=True)
+        a = video_encoder_args("veryfast", 17, hw=hw, bitrate_kbps=25000)
+        assert a[a.index("-b:v") + 1] == "25000k" and a[a.index("-maxrate") + 1] == "25000k"
+        assert a[a.index("-bufsize") + 1] == "50000k"
+        assert "-crf" not in a and "-cq" not in a  # the target replaces the quality setting
+    for hw in (False, True):
+        b = video_encoder_args("veryfast", 20, hw=hw)
+        assert "-maxrate" not in b and ("-crf" in b or "-cq" in b)
 
 
 def _ff(*args):

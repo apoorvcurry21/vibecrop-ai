@@ -92,8 +92,7 @@ window) is written back into `plan.json`.
 Rendering (`final.mp4`, 1080x1920) center-crops each clip to 9:16 without stretching, lays it over the
 speaker only during its slot, never uses the clip's audio, and burns a small "Video: <channel>" credit line.
 The export **follows the speaker video**: its frame rate (24-60 fps, so a 60 fps recording stays 60 fps) and its
-quality (libx264 CRF 17, video bitrate capped at the source's own bitrate, never below an 8 Mbps ceiling; audio
-48 kHz, at least 192 kbps). Captions and overlays force a re-encode, so the file cannot be bit-identical to the
+audio (48 kHz, at least 192 kbps); the video is encoded at a target of 25 Mbps whatever the source's bitrate. Captions and overlays force a re-encode, so the file cannot be bit-identical to the
 source, and a B-roll section can never be sharper than the downloaded clip.
 A slot whose clip failed simply keeps the speaker on screen.
 

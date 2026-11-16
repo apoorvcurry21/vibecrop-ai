@@ -14,7 +14,7 @@ from src.captions import styles
 from src.captions.chunks import chunk_words
 from src.captions.rewrite import MODES, CaptionError, rewrite_chunks
 from src.rendering.ass import caption_events, credit_event, text_events, write_ass
-from src.rendering.compose import (DEFAULT_FACE_Y, EXPORT_CRF, LAYOUTS, Overlay, RenderError, Sound, probe_profile,
+from src.rendering.compose import (DEFAULT_FACE_Y, EXPORT_CRF, EXPORT_KBPS, LAYOUTS, Overlay, RenderError, Sound, probe_profile,
                                    render)
 from src.sfx import library as sfx_library
 
@@ -111,12 +111,12 @@ def run(job_dir: str | Path, main_video: str | Path, credits: bool = True, capti
             return render(main_video, overlays, job_dir / DRAFT_NAME, subtitles_file=ass_name, cwd=job_dir,
                           face_y=face_y, progress=progress, preset="ultrafast", crf=DRAFT_CRF, sounds=sounds,
                           audio_kbps=DRAFT_AUDIO_KBPS, scale_to=DRAFT_SIZE)
-    profile = probe_profile(main_video)  # the export keeps the speaker video's frame rate and does not go below its quality
-    log(f"Rendering {what} at {profile.fps} fps, video bitrate capped at {profile.maxrate_kbps // 1000} Mbps...")
+    profile = probe_profile(main_video)  # the export keeps the speaker video's frame rate and audio quality
+    log(f"Rendering {what} at {profile.fps} fps, video bitrate {EXPORT_KBPS // 1000} Mbps...")
     with perf.stage(job_dir, "render"):
         return render(main_video, overlays, job_dir / "final.mp4", subtitles_file=ass_name, cwd=job_dir,
                       face_y=face_y, progress=progress, hw=True, sounds=sounds, crf=EXPORT_CRF, fps=profile.fps,
-                      maxrate_kbps=profile.maxrate_kbps, audio_kbps=profile.out_audio_kbps)
+                      bitrate_kbps=EXPORT_KBPS, audio_kbps=profile.out_audio_kbps)
 
 
 def main() -> None:
