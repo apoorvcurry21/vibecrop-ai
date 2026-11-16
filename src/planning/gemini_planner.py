@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from src.config import gemini_fallback_models, gemini_model, total_brolls
 from src.gemini_client import GeminiError, content as _content, generate, make_client
 from src.planning.layouts import assign_layouts
-from src.planning.prompt import build_user_prompt, get_system_prompt
+from src.planning.prompt import build_user_prompt, clean_hooks, get_system_prompt
 from src.planning.schema import PlanResponse
 from src.planning.validate import resolve_layout, snap_and_sort, validate
 
@@ -72,6 +72,7 @@ def plan(transcript: dict, total: int | None = None, model: str | None = None, c
                 "video_duration": duration,
                 "model": models[0],  # the model that actually produced the plan
                 "video_topic": parsed.video_topic,
+                "hooks": clean_hooks(parsed.hooks),  # never a reason to retry: no hooks just means no suggestions
                 "notes": " ".join((notes or "").split()),
                 "status": "draft",  # becomes "approved" after the user reviews it in the UI
                 "style": style,

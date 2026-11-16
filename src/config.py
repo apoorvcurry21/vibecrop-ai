@@ -80,6 +80,11 @@ def gemini_fallback_models() -> list[str]:
     return [m.strip() for m in raw.split(",") if m.strip()]
 
 
+def relevance_enabled() -> bool:
+    """RELEVANCE_CHECK=0 switches off the 'does this clip fit?' check done with Gemini after each download."""
+    return os.environ.get("RELEVANCE_CHECK", "").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def clamp_brolls(n: int) -> int:
     return max(1, min(MAX_BROLLS, int(n)))
 

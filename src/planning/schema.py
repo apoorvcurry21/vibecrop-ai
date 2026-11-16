@@ -21,3 +21,4 @@ class BRollItem(BaseModel):
 class PlanResponse(BaseModel):
     video_topic: str  # one-line English summary of the whole video
     items: list[BRollItem]
+    hooks: list[str] = []  # 3 different opening lines for the first seconds of the reel (see workflow.set_hook)

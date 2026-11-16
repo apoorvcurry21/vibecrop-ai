@@ -95,7 +95,18 @@ audio (48 kHz, at least 192 kbps); the video is encoded at a target of 25 Mbps w
 source, and a B-roll section can never be sharper than the downloaded clip.
 A slot whose clip failed simply keeps the speaker on screen.
 
-Known limits: the clip window is chosen blindly, so some clips are off-topic (use the Phase 4 "Regenerate");
+**Clip check.** The clip window is still chosen blindly, so after each download a light Gemini model looks at two small
+frames of the clip and says whether it fits what is being said (`src/sourcing/relevance.py`). A "no" makes the app try
+the next video; if every candidate is judged off-topic the first one is kept and the review page marks it with a
+warning. It costs about 1-3 Gemini requests per B-roll (about 2-3 s each, run in parallel with the downloads). It never
+blocks a clip: if Gemini is unavailable the clip is simply kept, and after two failures in a row the check pauses for a
+minute. Switch it off with `RELEVANCE_CHECK=0`.
+
+**Opening hook.** The planner also writes three opening lines (3-7 words). The first is put on the video as a text
+overlay for roughly the first 3 seconds; the review page's **Opening hook** panel lets you pick another, write your
+own or remove it. It is an ordinary text overlay, so the chat can restyle or move it.
+
+Known limits: the clip check is a judgement from two frames, so it can still miss (use the Phase 4 "Regenerate");
 some YouTube videos carry their own burned-in captions or watermarks; footage is third-party and copyrighted
 (credited, but you are responsible for how you publish it); YouTube may block downloads from cloud IPs.
 The planner only plans video. To use a picture or a clip of your own, open **Add your own picture or video** on the

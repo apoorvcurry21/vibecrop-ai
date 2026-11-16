@@ -12,15 +12,20 @@ from typing import Callable
 
 from src import config
 from src.fileio import write_json_atomic
+from src.sourcing import relevance
 from src.sourcing.youtube import SourcingError, source_video_clip
 
 
-def source_item(job_dir: Path, item: dict, skip_ids: set[str] | frozenset[str] = frozenset()) -> dict:
-    """Source one plan item. Used by the batch run and by the UI's 'Regenerate Asset' button."""
+def source_item(job_dir: Path, item: dict, skip_ids: set[str] | frozenset[str] = frozenset(), checker=None) -> dict:
+    """Source one plan item. Used by the batch run and by the UI's 'Regenerate Asset' button.
+    Each downloaded clip is checked against what is being said (relevance.py) unless RELEVANCE_CHECK=0."""
     slot = item["timestamp_end"] - item["timestamp_start"]
     queries = [item["search_query"], *item.get("alternative_queries", [])]
     stem = job_dir / "clips" / f"clip_{item['id']:02d}"
-    meta = source_video_clip(queries, slot, stem, skip_ids=skip_ids)
+    checker = checker or relevance.default_checker()
+    meaning = item.get("english_meaning") or item.get("spoken_text") or ""
+    verify = (lambda clip, length, query: checker.check(clip, length, meaning, query)) if checker else None
+    meta = source_video_clip(queries, slot, stem, skip_ids=skip_ids, verify=verify)
     meta["path"] = f"clips/{meta['path']}"  # relative to the job folder
     return meta
 
@@ -62,7 +67,8 @@ def run(job_dir: str | Path, only: list[int] | None = None, force: bool = False,
             item["asset"] = fut.result()
             a = item["asset"]
             if a.get("status") == "ok":
-                log(f"[{item['id']:>2}] ok  {a['channel']} - {a['title'][:60]} @ {a['window_start']}s")
+                note = f"  (may not fit: {a.get('relevance_reason', '')})" if a.get("relevance") == "mismatch" else ""
+                log(f"[{item['id']:>2}] ok  {a['channel']} - {a['title'][:60]} @ {a['window_start']}s{note}")
             else:
                 log(f"[{item['id']:>2}] FAILED: {a.get('error')}")
             write_json_atomic(plan_path, plan)  # save as we go

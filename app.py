@@ -113,6 +113,40 @@ def rerun_fragment() -> None:
 
 
 @st.fragment
+def hook_panel(job: Path) -> None:
+    """The opening hook: the text on screen for the first ~3 seconds. The planner suggests three; pick one, write your
+    own, or have none. A fragment, so a click here reruns only this panel."""
+    plan = workflow.load_plan(job)
+    options = workflow.hook_options(plan)
+    cur = workflow.current_hook(plan)
+    cur_text = cur["text"] if cur else None
+    NONE = "No hook"
+    choices = [*options, *([cur_text] if cur_text and cur_text not in options else []), NONE]
+    ver = hashlib.md5(json.dumps([options, cur_text]).encode()).hexdigest()[:6]  # widgets follow what is saved
+    st.caption("The big line at the top of the video for the first 3 seconds. It decides whether people keep watching "
+               "or scroll on. You can still move, recolour or resize it by asking the chat.")
+    if not options and not cur_text:
+        st.info("This plan has no hook suggestions (re-plan to get some), but you can write your own below.")
+    pick = st.radio("Opening hook", choices, index=choices.index(cur_text) if cur_text else len(choices) - 1,
+                    key=f"hook_pick_{ver}", label_visibility="collapsed")
+    if pick != (cur_text or NONE):
+        try:
+            workflow.remove_hook(job) if pick == NONE else workflow.set_hook(job, pick)
+        except workflow.WorkflowError as exc:
+            fail(exc)
+        else:
+            rerun_fragment()
+    own = st.text_input("Or write your own", key=f"hook_own_{ver}", max_chars=60, placeholder="e.g. Ye 1 galti mat karna")
+    if st.button("Use my own hook", key=f"hook_use_{ver}", disabled=not own.strip()):
+        try:
+            workflow.set_hook(job, own)
+        except workflow.WorkflowError as exc:
+            fail(exc)
+        else:
+            rerun_fragment()
+
+
+@st.fragment
 def sfx_panel(job: Path) -> None:
     """Sound effects on the video: listen, move, change the volume, delete, add from the library. A fragment, so
     every click here reruns only this panel. (The chat can also add sounds by name, phrase or YouTube link.)"""
@@ -717,6 +751,9 @@ for item in items:
                                   disabled=removed)
             if asset.get("status") == "ok":
                 st.caption(f"From: {asset.get('channel', '?')} - {asset.get('title', '')[:70]}")
+            if asset.get("relevance") == "mismatch":
+                st.caption(f"⚠ This clip may not fit what you say ({asset.get('relevance_reason') or 'looks unrelated'}). "
+                           "Try Regenerate asset or change the search query.")
         with right:
             changed = new_q.strip() != item["search_query"]
             if st.button("Search with this query", key=f"s{item['id']}", disabled=removed or not changed):
@@ -736,6 +773,10 @@ for item in items:
         if not removed and clip and clip.is_file():
             if st.toggle("Edit layout, timing, order and zoom", key=f"edit{item['id']}"):
                 slot_editor(job, item["id"])
+
+# ---------------------------------------------------------------- opening hook
+with st.expander("Opening hook (text for the first 3 seconds)", expanded=bool(workflow.hook_options(plan))):
+    hook_panel(job)
 
 # ---------------------------------------------------------------- your own picture / video
 with st.expander("Add your own picture or video"):

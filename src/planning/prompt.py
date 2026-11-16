@@ -51,6 +51,26 @@ def feasible_max(duration: float) -> int:
     return max(1, n)
 
 
+MAX_HOOK_LEN = 60
+HOOK_REQUEST = (
+    "Also fill `hooks` with exactly 3 DIFFERENT opening lines for the first 3 seconds of the reel, the text on screen "
+    "that makes a viewer keep watching instead of scrolling. Each is 3 to 7 words, true to what this video really says "
+    "(no false promises), and uses a curiosity gap, a bold claim or a direct question. Write them in Latin script in "
+    "the speaker's own language style (English, or Hinglish if the speaker talks Hindi). No emojis, no hashtags, no "
+    "quotation marks."
+)
+
+
+def clean_hooks(raw: list[str] | None) -> list[str]:
+    """At most 3 distinct, non-empty, reasonably short opening lines (quotes stripped, spaces collapsed)."""
+    out: list[str] = []
+    for h in raw or []:
+        h = " ".join(str(h).split()).strip("\"'“”‘’ ")
+        if h and len(h) <= MAX_HOOK_LEN and h.lower() not in {x.lower() for x in out}:
+            out.append(h)
+    return out[:3]
+
+
 def build_user_prompt(transcript: dict, total: int, notes: str = "") -> str:
     duration = float(transcript.get("video_duration") or transcript.get("duration") or 0.0)
     lines = [f"[{s['start']:.2f}-{s['end']:.2f}] {s['text']}" for s in transcript["segments"]]
@@ -64,7 +84,8 @@ def build_user_prompt(transcript: dict, total: int, notes: str = "") -> str:
         f"Spoken language: {transcript.get('language', 'unknown')}\n"
         f"Video duration: {duration:.2f} seconds\n"
         f"Plan exactly {total} B-roll items.\n"
-        f"Longest allowed stretch without B-roll: {max_gap_for(total, duration):.0f} seconds.\n\n"
+        f"Longest allowed stretch without B-roll: {max_gap_for(total, duration):.0f} seconds.\n"
+        f"{HOOK_REQUEST}\n\n"
         f"{notes_block}"
         "TRANSCRIPT\n" + "\n".join(lines)
     )

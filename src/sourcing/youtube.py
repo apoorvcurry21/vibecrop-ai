@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 MIN_SOURCE_S = 30.0  # skip tiny clips/shorts (often logos, memes or vertical already)
 MAX_SOURCE_S = 1200.0  # skip very long videos (streams, full matches): slow and mostly filler
@@ -142,16 +142,33 @@ def download_audio_section(candidate: dict, start: float, end: float, out_stem: 
     return path
 
 
+Verify = Callable[[Path, float, str], "tuple[bool | None, str]"]  # (clip, its length, query used) -> (fits?, why not)
+
+
 def source_video_clip(queries: list[str], slot_seconds: float, out_stem: Path,
                       skip_ids: set[str] | frozenset[str] = frozenset(),
-                      max_tries: int = MAX_DOWNLOAD_TRIES) -> dict:
+                      max_tries: int = MAX_DOWNLOAD_TRIES, verify: Verify | None = None) -> dict:
     """Try each query in turn; download the first candidate that yields a valid clip.
 
     Returns metadata (video id, url, title, channel, window, file path). `skip_ids` lets the
     UI's "Regenerate" ask for a different video than the ones already tried.
+
+    `verify` (optional) says whether a downloaded clip fits what is being said: True keeps it, None (unknown) keeps it,
+    False tries the next candidate. If every candidate is judged off-topic, the first one is still returned (marked
+    relevance="mismatch") rather than leaving the slot empty.
     """
     tries, last_error = 0, "no usable search results"
     seen = set(skip_ids)
+    fallback: dict | None = None  # the first clip judged off-topic; used only if nothing better turns up
+
+    def finish_fallback(message: str) -> dict:
+        if fallback is None:
+            raise SourcingError(message)
+        kept = out_stem.parent / fallback["path"]
+        final = kept.with_name(out_stem.name + kept.suffix)
+        kept.replace(final)
+        return {**fallback, "path": final.name, "tried_ids": sorted(seen)}
+
     for query in [q for q in queries if q and q.strip()]:
         try:
             candidates = search_candidates(query, skip_ids=seen)
@@ -160,7 +177,7 @@ def source_video_clip(queries: list[str], slot_seconds: float, out_stem: Path,
             continue
         for cand in candidates:
             if tries >= max_tries:
-                raise SourcingError(f"Gave up after {tries} downloads. Last error: {last_error}")
+                return finish_fallback(f"Gave up after {tries} downloads. Last error: {last_error}")
             seen.add(cand["id"])
             tries += 1
             start, end = pick_window(cand["duration"], slot_seconds)
@@ -174,11 +191,25 @@ def source_video_clip(queries: list[str], slot_seconds: float, out_stem: Path,
                 last_error = f"{cand['id']}: downloaded clip too short ({got:.1f}s)"
                 path.unlink(missing_ok=True)
                 continue
-            return {
+            fits, why = (None, "") if verify is None else verify(path, got, query)
+            meta = {
                 "status": "ok", "source": "youtube", "query_used": query,
                 "video_id": cand["id"], "url": cand["url"], "title": cand["title"],
                 "channel": cand["channel"], "source_duration": cand["duration"],
                 "window_start": start, "window_end": end, "path": path.name, "clip_duration": round(got, 2),
+                "relevance": "unchecked" if fits is None else "match",
                 "tried_ids": sorted(seen),  # so "Regenerate" can ask for a different video
             }
-    raise SourcingError(f"No clip found. Last error: {last_error}")
+            if fits is False:
+                last_error = f"{cand['id']}: does not fit ({why})"
+                if fallback is None:  # keep it aside: the next download reuses the same file name
+                    kept = path.with_name(f"{out_stem.name}_offtopic{path.suffix}")
+                    path.replace(kept)
+                    fallback = {**meta, "path": kept.name, "relevance": "mismatch", "relevance_reason": why}
+                else:
+                    path.unlink(missing_ok=True)
+                continue
+            if fallback is not None:
+                (out_stem.parent / fallback["path"]).unlink(missing_ok=True)
+            return meta
+    return finish_fallback(f"No clip found. Last error: {last_error}")

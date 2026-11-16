@@ -236,6 +236,7 @@ def run_pipeline(job_dir: Path, log: Callable[[str], None] = print, total: int |
         with perf.stage(job_dir, "plan"):
             planning.run(job_dir, total=total or meta.get("total_brolls"), notes=meta.get("notes", ""),
                          style=meta.get("style", "overlay"))
+        apply_default_hook(job_dir)
     log("Downloading B-roll clips...")
     with perf.stage(job_dir, "sourcing"):
         sourcing.run(job_dir, log=log)
@@ -664,6 +665,54 @@ def remove_text(job_dir: Path, text_id: int) -> None:
     _text(plan, text_id)
     plan["texts"] = [t for t in plan["texts"] if t["id"] != text_id]
     _save(job_dir, plan)
+
+
+# ----------------------------------------------------------------------------- the opening hook
+# The hook is an ordinary text overlay (so the chat can restyle or move it) that is flagged `"hook": True`, which lets
+# the review page find it again. There is at most one.
+HOOK_START_S, HOOK_END_S = 0.3, 3.0
+
+
+def hook_options(plan: dict) -> list[str]:
+    """The opening lines the planner suggested (empty for plans made before hooks existed)."""
+    return [h for h in plan.get("hooks", []) if isinstance(h, str) and h.strip()]
+
+
+def current_hook(plan: dict) -> dict | None:
+    return next((t for t in plan.get("texts", []) if t.get("hook")), None)
+
+
+def set_hook(job_dir: Path, text: str) -> dict:
+    """Make `text` the opening hook (replacing the current one): on screen for roughly the first 3 seconds."""
+    plan = load_plan(job_dir)
+    duration = float(plan.get("video_duration") or 0.0)
+    end = min(HOOK_END_S, duration) if duration else HOOK_END_S
+    text, start, end = _check_text(plan, text, HOOK_START_S, end)
+    texts = [t for t in plan.get("texts", []) if not t.get("hook")]
+    entry = {"id": max((t["id"] for t in plan.get("texts", [])), default=0) + 1, "text": text, "start": start,
+             "end": end, **normalize_text_style({}), "hook": True}
+    plan["texts"] = [*texts, entry]
+    _save(job_dir, plan)
+    return entry
+
+
+def remove_hook(job_dir: Path) -> None:
+    plan = load_plan(job_dir)
+    if current_hook(plan) is not None:
+        plan["texts"] = [t for t in plan["texts"] if not t.get("hook")]
+        _save(job_dir, plan)
+
+
+def apply_default_hook(job_dir: Path) -> dict | None:
+    """After planning: put the planner's first suggestion on the video (the review page lets the user change it)."""
+    plan = load_plan(job_dir)
+    options = hook_options(plan)
+    if not options or current_hook(plan) is not None:
+        return None
+    try:
+        return set_hook(job_dir, options[0])
+    except WorkflowError:
+        return None  # a bad suggestion must never stop the pipeline
 
 
 # ---------------------------------------------------------------- caption style and word emphasis
