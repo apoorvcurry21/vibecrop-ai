@@ -61,6 +61,7 @@ def fail(exc: Exception) -> None:
 
 LAYOUT_LABELS = {"overlay": "Overlay (full screen)", "split": "Split (b-roll on top, facecam below)",
                  "pip": "Picture-in-picture (small box over you)"}
+ZOOM_SLOW = 1.6  # how close the slow 'Zoom in' / 'Zoom out' gets (the same value the chat's presets use)
 LAYOUT_COLORS = {"overlay": "#3b82f6", "split": "#10b981", "pip": "#f59e0b"}
 PIP_POSITION_LABELS = {"top-left": "Top left", "top": "Top", "top-right": "Top right", "center": "Center",
                        "bottom-left": "Bottom left", "bottom": "Bottom", "bottom-right": "Bottom right"}
@@ -71,11 +72,6 @@ def cached_frame(clip: str, mtime: float, framing_json: str, layout: str, durati
                  clip_len: float | None, pip_json: str = "null") -> bytes:
     return preview.frame_png(Path(clip), json.loads(framing_json), layout, duration, at, clip_len,
                              pip=json.loads(pip_json))
-
-
-@st.cache_data(show_spinner=False, max_entries=64)
-def cached_source_view(clip: str, mtime: float, framing_json: str, layout: str, pip_json: str = "null") -> bytes:
-    return preview.source_view_png(Path(clip), json.loads(framing_json), layout, pip=json.loads(pip_json))
 
 
 @st.cache_data(show_spinner=False, max_entries=128)
@@ -321,13 +317,9 @@ def timeline_strip(items: list[dict], duration: float) -> None:
             f' &nbsp; (the speaker is on screen in the gaps)</div>')
 
 
-def _set_state(**values) -> None:
-    st.session_state.update(values)
-
-
 @st.fragment
 def slot_editor(job: Path, item_id: int) -> None:
-    """Layout, timing, swap and zoom/pan keyframes for one slot. It is a fragment: moving a slider reruns only
+    """Layout, timing, swap and zoom for one slot. It is a fragment: moving a slider reruns only
     this editor, not the whole page. Actions that change other slots call st.rerun() (the full page)."""
     plan = workflow.load_plan(job)
     items = sorted(plan["items"], key=lambda i: i["timestamp_start"])  # timeline order (the chat can add slots in between)
@@ -411,59 +403,49 @@ def slot_editor(job: Path, item_id: int) -> None:
                 except workflow.WorkflowError as exc:
                     fail(exc)
 
-    # ---- framing (zoom / pan keyframes)
+    # ---- zoom (centred; one click saves it)
     if not (clip and clip.is_file()):
-        st.caption("No clip to frame yet.")
+        st.caption("No clip to zoom yet.")
         return
-    st.markdown("**Framing: zoom and pan** (from the start keyframe to the end keyframe over the slot)")
-    cur = {}
-    for col, name in zip(st.columns(2), ("start", "end")):
-        with col:
-            st.caption(f"{name.capitalize()} keyframe")
-            cur[name] = {
-                "z": st.slider("Zoom", 1.0, framing_mod.MAX_ZOOM, float(saved[name]["z"]), 0.05, key=k(f"z{name}")),
-                "x": st.slider("Pan left / right", 0.0, 1.0, float(saved[name]["x"]), 0.01, key=k(f"x{name}")),
-                "y": st.slider("Pan up / down", 0.0, 1.0, float(saved[name]["y"]), 0.01, key=k(f"y{name}")),
-            }
+    z0, z1 = float(saved["start"]["z"]), float(saved["end"]["z"])
+    is_static = abs(z1 - z0) < 1e-6
+    if is_static:
+        now = "no zoom" if z0 <= 1.0 + 1e-6 else f"zoomed in {z0:g}x the whole time"
+    else:
+        now = f"slowly zooms {'in' if z1 > z0 else 'out'} ({z0:g}x to {z1:g}x)"
+    st.markdown(f"**Zoom**: now {now}")
 
-    def preset(z_start: float, z_end: float) -> dict:
-        vals = {}
-        for name, z in (("start", z_start), ("end", z_end)):
-            vals.update({k(f"z{name}"): z, k(f"x{name}"): 0.5, k(f"y{name}"): 0.5})
-        return vals
+    def centred(start_z: float, end_z: float) -> dict:
+        return {"start": {"z": start_z, "x": 0.5, "y": 0.5}, "end": {"z": end_z, "x": 0.5, "y": 0.5}}
 
-    p1, p2, p3, p4, p5 = st.columns(5)
-    for col, label, vals in ((p1, "Zoom in", preset(1.0, 1.6)), (p2, "Zoom out", preset(1.6, 1.0)),
-                             (p3, "Hold", preset(1.0, 1.0)), (p4, "Hold zoomed", preset(1.4, 1.4))):
+    zc = st.columns(3)
+    for col, label, (za, zb) in zip(zc, ("Zoom in", "Zoom out", "No zoom"), ((1.0, ZOOM_SLOW), (ZOOM_SLOW, 1.0), (1.0, 1.0))):
         with col:
-            st.button(label, key=k("p" + label), on_click=_set_state, kwargs=vals, use_container_width=True)
-    unsaved = framing_mod.normalize(cur) != saved
-    with p5:
-        if st.button("Save framing", key=k("savef"), type="primary", disabled=not unsaved):
-            workflow.set_framing(job, item_id, cur)
-            st.rerun()
-    if unsaved:
-        st.caption("Unsaved framing changes: press Save framing to keep them (the preview below already shows them).")
+            if st.button(label, key=k("z" + label), use_container_width=True,
+                         help={"Zoom in": "Starts normal and slowly gets closer.",
+                               "Zoom out": "Starts close and slowly pulls back.",
+                               "No zoom": "The clip just fills the screen."}[label]):
+                workflow.set_framing(job, item_id, centred(za, zb))
+                rerun_fragment()
+    held = z0 if is_static else 1.0
+    level = st.slider("Or hold one zoom level the whole time (1x = no zoom)", 1.0, framing_mod.MAX_ZOOM, held, 0.05,
+                      key=k("zlevel"))
+    if abs(level - held) > 1e-6:
+        workflow.set_framing(job, item_id, centred(level, level))
+        rerun_fragment()
 
     # ---- preview
-    view = st.radio("Preview as", ["9:16 (as exported)", "16:9 (whole clip, crop outlined)"], horizontal=True,
-                    key=f"view{item_id}")
-    framing_json, mtime = json.dumps(framing_mod.normalize(cur)), clip.stat().st_mtime
+    framing_json, mtime = json.dumps(saved), clip.stat().st_mtime
     pip_json = json.dumps(saved_pip) if new_layout == "pip" else "null"
     half = {"split": " (top half)", "pip": " (the small box)"}.get(new_layout, "")
     try:
-        if view.startswith("9:16"):
-            a, b = st.columns(2)
-            with a:
-                st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "start", clip_len,
-                                      pip_json), caption="First frame of the slot" + half)
-            with b:
-                st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "end", clip_len,
-                                      pip_json), caption="Last frame of the slot" + half)
-        else:
-            st.image(cached_source_view(str(clip), mtime, framing_json, new_layout, pip_json),
-                     caption="Yellow solid box = what shows at the start; blue dashed = at the end. "
-                             "The dimmed part is cut off.")
+        a_col, b_col = st.columns(2)
+        with a_col:
+            st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "start", clip_len,
+                                  pip_json), caption="First frame of the slot" + half)
+        with b_col:
+            st.image(cached_frame(str(clip), mtime, framing_json, new_layout, end - start, "end", clip_len,
+                                  pip_json), caption="Last frame of the slot" + half)
     except Exception as exc:  # noqa: BLE001
         st.warning(f"Preview unavailable: {exc}")
     if st.button("Play preview with the speaker", key=k("play"),
@@ -472,7 +454,7 @@ def slot_editor(job: Path, item_id: int) -> None:
             try:
                 face_y = float(workflow.read_job_meta(job).get("split_face_y", DEFAULT_FACE_Y))
                 out = preview.render_clip_preview(
-                    clip, workflow.source_video_path(job), start, end, new_layout, framing_mod.normalize(cur),
+                    clip, workflow.source_video_path(job), start, end, new_layout, saved,
                     face_y, job / "previews" / f"slot_{item_id}.mp4", pip=saved_pip if new_layout == "pip" else None)
                 st.session_state[f"playing{item_id}"] = str(out)
             except Exception as exc:  # noqa: BLE001
@@ -752,7 +734,7 @@ for item in items:
                 workflow.set_enabled(job, item["id"], removed)
                 st.rerun()
         if not removed and clip and clip.is_file():
-            if st.toggle("Edit layout, timing, order and framing (zoom / pan)", key=f"edit{item['id']}"):
+            if st.toggle("Edit layout, timing, order and zoom", key=f"edit{item['id']}"):
                 slot_editor(job, item["id"])
 
 # ---------------------------------------------------------------- your own picture / video

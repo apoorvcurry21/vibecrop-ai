@@ -21,7 +21,7 @@ Built on a zero-budget stack: free cloud APIs, `yt-dlp`, FFmpeg and Streamlit.
 - [x] Phase 2: Gemini editor (context and planning)
 - [x] Phase 3: Media sourcing and smart 9:16 formatting (video only from the planner; you add your own pictures and clips)
 - [x] Phase 4: Streamlit mini-editor and caption export
-- [x] Phase 5: AI count suggestion, video styles (overlay / split / hybrid), timeline editing, zoom/pan framing
+- [x] Phase 5: AI count suggestion, video styles (overlay / split / hybrid), timeline editing, zoom
 
 ## Setup
 
@@ -126,11 +126,11 @@ streamlit run app.py        # then open http://localhost:8501
      or run longer than its downloaded clip (the app downloads a few seconds of headroom; **Fetch longer
      clip** re-downloads, which may pick a different video).
    - **Order**: *Swap with previous / next* trades the clips between slots (timings and layouts stay).
-   - **Framing (zoom and pan)**: a start and an end keyframe, each with zoom (1x to 3x) and pan left/right/up/down;
-     the clip animates smoothly between them (Ken Burns). Presets: Zoom in, Zoom out, Hold.
-     **Preview as 9:16** shows the first and last frame exactly as exported; **16:9** shows the whole source
-     clip with the crop outlined (solid = start, dashed = end, dimmed = cut off). **Play preview with the
-     speaker** renders a quick real clip of that slot with the same code as the final export.
+   - **Zoom**: three buttons, *Zoom in* (starts normal, slowly gets closer), *Zoom out* and *No zoom*, plus one slider
+     to hold a single zoom level (1x to 3x) the whole time. Zoom is always centred and every click saves at once. The
+     two previews show the first and last frame exactly as exported; **Play preview with the speaker** renders a
+     quick real clip of that slot with the same code as the final export. (Older plans that were panned by hand still
+     render the same; the next zoom click resets them to the centre.)
 4. **Preview full reel (draft, low quality)**: before exporting, one click renders the WHOLE reel (B-roll, captions,
    credits and sounds together) as a small 540x960, 30 fps `draft.mp4` from the same plan and filter graph as the
    export, so it cannot disagree with it. It changes nothing (the plan is not approved, nothing is deleted) and

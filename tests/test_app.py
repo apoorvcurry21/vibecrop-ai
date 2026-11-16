@@ -173,10 +173,13 @@ def button(at, label):
 def test_slot_editor_opens_with_sliders_and_previews(tmp_path, monkeypatch):
     job, at = open_editor(tmp_path, monkeypatch)
     assert not at.exception, [e.value for e in at.exception]
-    assert [s.label for s in at.slider if s.label == "Zoom"] == ["Zoom", "Zoom"]  # start + end keyframe
+    labels = [s.label for s in at.slider]
+    assert sum(l.startswith("Or hold one zoom level") for l in labels) == 1  # one zoom slider...
+    assert not any("Pan" in l or l == "Zoom" for l in labels)  # ...and no pan or keyframe sliders any more
     assert len(at.get("image")) == 2 + 2  # one list still per slot + the editor's first-frame and last-frame stills
     assert button(at, "Swap with previous").disabled and not button(at, "Swap with next").disabled
-    assert button(at, "Save framing").disabled  # nothing changed yet
+    assert not [b for b in at.button if b.label == "Save framing"]  # every zoom click saves on its own
+    assert any("Zoom" in m.value and "no zoom" in m.value for m in at.markdown)
 
 
 @needs_ffmpeg
@@ -195,22 +198,46 @@ def test_slot_videos_load_only_when_play_is_pressed(tmp_path, monkeypatch):
 
 
 @needs_ffmpeg
-def test_zoom_preset_and_save_framing_are_stored_in_the_plan(tmp_path, monkeypatch):
+def test_zoom_buttons_save_at_once_and_always_centre(tmp_path, monkeypatch):
     job, at = open_editor(tmp_path, monkeypatch)
     button(at, "Zoom in").click().run()
-    assert [s.value for s in at.slider if s.label == "Zoom"] == [1.0, 1.6]
-    assert not button(at, "Save framing").disabled
-    assert any("Unsaved framing" in c.value for c in at.caption)
-    button(at, "Save framing").click().run()
     saved = workflow.load_plan(job)["items"][0]["framing"]
-    assert saved["start"]["z"] == 1.0 and saved["end"]["z"] == 1.6
+    assert (saved["start"]["z"], saved["end"]["z"]) == (1.0, 1.6)
+    assert all(saved[k]["x"] == 0.5 and saved[k]["y"] == 0.5 for k in ("start", "end"))
+    assert any("slowly zooms in" in m.value for m in at.markdown)
+    button(at, "Zoom out").click().run()
+    saved = workflow.load_plan(job)["items"][0]["framing"]
+    assert (saved["start"]["z"], saved["end"]["z"]) == (1.6, 1.0)
+    button(at, "No zoom").click().run()
+    assert workflow.load_plan(job)["items"][0]["framing"]["end"]["z"] == 1.0
+    assert not at.exception, [e.value for e in at.exception]
 
 
 @needs_ffmpeg
-def test_switching_the_preview_to_16_9_shows_the_whole_clip(tmp_path, monkeypatch):
+def test_zoom_slider_holds_one_level_the_whole_time(tmp_path, monkeypatch):
     job, at = open_editor(tmp_path, monkeypatch)
-    at.radio(key="view1").set_value("16:9 (whole clip, crop outlined)").run()
-    assert not at.exception and len(at.get("image")) == 2 + 1  # the two list stills + the whole-clip view
+    next(s for s in at.slider if s.label.startswith("Or hold one zoom level")).set_value(2.0).run()
+    saved = workflow.load_plan(job)["items"][0]["framing"]
+    assert saved["start"] == saved["end"] == {"z": 2.0, "x": 0.5, "y": 0.5}
+    assert any("zoomed in 2x the whole time" in m.value for m in at.markdown)
+    assert next(s for s in at.slider if s.label.startswith("Or hold one zoom level")).value == 2.0  # shows what is saved
+
+
+@needs_ffmpeg
+def test_an_old_panned_framing_still_renders_and_a_zoom_click_resets_it_to_the_centre(tmp_path, monkeypatch):
+    """Plans saved before the pan sliders were removed may hold pan values: they must keep working, and the new
+    buttons simply replace them with a centred zoom."""
+    monkeypatch.setenv("VIBECROP_WORKDIR", str(tmp_path))
+    job = make_editable_job(tmp_path)
+    workflow.set_framing(job, 1, {"start": {"z": 2.0, "x": 0.1, "y": 0.9}, "end": {"z": 2.0, "x": 0.1, "y": 0.9}})
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["job_dir"] = str(job)
+    at.run()
+    at.toggle(key="edit1").set_value(True).run()
+    assert not at.exception, [e.value for e in at.exception]
+    button(at, "Zoom in").click().run()
+    saved = workflow.load_plan(job)["items"][0]["framing"]
+    assert saved["start"]["x"] == saved["end"]["x"] == 0.5 and saved["start"]["y"] == 0.5
 
 
 @needs_ffmpeg
