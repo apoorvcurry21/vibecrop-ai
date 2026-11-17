@@ -37,9 +37,7 @@ def _target(ctx: ToolContext, args: dict, default_len: float) -> tuple[int | Non
     if args.get("slot_id") is not None:
         sid = _int(args, "slot_id")
         plan = workflow.load_plan(ctx.job)
-        item = next((i for i in plan["items"] if i["id"] == sid), None)
-        if item is None:
-            raise ToolError(f"No B-roll with id {sid}.")
+        item = workflow._item(plan, sid)  # raises with the ids that do exist
         return sid, item["timestamp_start"], item["timestamp_end"]
     start = _num(args, "start")
     end = _opt_num(args, "end")
@@ -202,9 +200,7 @@ def _preview_slot(ctx: ToolContext, args: dict) -> dict:
 
     sid = _int(args, "slot_id")
     plan = workflow.load_plan(ctx.job)
-    item = next((i for i in plan["items"] if i["id"] == sid), None)
-    if item is None:
-        raise ToolError(f"No B-roll with id {sid}.")
+    item = workflow._item(plan, sid)
     clip = ctx.job / (item.get("asset") or {}).get("path", "x")
     if not clip.is_file():
         raise ToolError("That slot has no clip to preview.")

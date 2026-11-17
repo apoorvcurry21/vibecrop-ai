@@ -255,7 +255,8 @@ def _item(plan: dict, item_id: int) -> dict:
     for it in plan["items"]:
         if it["id"] == item_id:
             return it
-    raise WorkflowError(f"No B-roll with id {item_id}.")
+    ids = ", ".join(str(i["id"]) for i in sorted(plan["items"], key=lambda i: i["id"]))
+    raise WorkflowError(f"No B-roll with id {item_id}. The ids that exist: {ids or 'none'}.")
 
 
 def _resource(job_dir: Path, item: dict, skip_ids: set[str]) -> None:

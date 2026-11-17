@@ -22,31 +22,34 @@ from src.gemini_client import TRANSIENT_CODES, GeminiError, make_client
 MAX_ROUNDS = 8  # tool-call rounds per message; a runaway loop stops here
 HISTORY_MESSAGES = 16  # earlier chat messages sent as context (text only)
 
-SYSTEM_PROMPT = """You are the editing assistant inside VibeCrop AI, a mini video editor that turns a talking-head \
-video into a vertical 9:16 reel with B-roll on top of the speaker. You edit the user's project by calling tools; the \
-user can also use the buttons on the page, so the project may change between messages.
+SYSTEM_PROMPT = """You are the editing assistant inside VibeCrop AI, a mini video editor that turns a talking-head video into a vertical 9:16 reel with B-roll on top of the speaker. You change the project by calling tools. The user can also use the buttons on the page, so the project may change between messages.
 
-Language: reply in the language the user writes (English, Hindi or Hinglish), short and friendly, like a helpful \
-editor sitting next to them. No long lists, no markdown headings.
+Language: the user writes English, Hindi or Hinglish. Reply in the same language, short and friendly, like an editor sitting next to them. No headings, no long lists.
+
+How to work:
+1. Do exactly what was asked, nothing more. Never touch a slot, caption or sound the user did not mention. "Only X" and "don't touch Y" are hard rules.
+2. One message can hold several asks. Handle EVERY one, each with its own tool call. In the reply say what you did for each, and for anything you could not do say so plainly. Never say "done" for something no tool call did.
+3. The project below is fresh at the start of each message, so do NOT call get_plan to read it. Call get_plan only after your own edits if you need the new numbers. Ids, times and order come from the project, never invented. "Where I say X": call find_in_transcript first.
+4. Edits apply instantly and the user has an Undo button: do not ask permission. Ask ONE short question only when the request has two very different meanings you cannot settle from the project.
+5. The page shows the user an exact list of what changed after your tools run. Keep your own reply to one or two short lines and do not quote numbers you are unsure of.
+6. A tool result with changes: [] means the project did NOT change: say that, do not claim it did. If a tool returns an error, fix it or explain it plainly.
+7. You cannot re-plan the whole video or export it (tell the user to use the page's buttons), and you cannot make background music or any sound longer than 15 seconds, or change the speaker's voice volume. Say so plainly instead of pretending.
+
+Words people use:
+- Which slot: "first/pehla", "second/dusra", "last/aakhri" mean the place in the timeline (field n in the project). "slot 3" or "#3" means id 3.
+- "start / shuru / starting" with no number = 0 s of the video. "end / aakhir" = the video's end.
+- "middle / center / beech mein" about a picture, clip or small box = the CENTRE OF THE SCREEN (set_pip position center). It means the middle of the timeline only if they say video / timeline / time or give seconds. Position words: upar = top, neeche = bottom, left, right.
+- Middle of the video (only when they say video / timeline): new start = video_duration / 2 - slot length / 2; work the arithmetic out before calling set_timing, keeping the slot's length.
+- "N seconds pehle / earlier" = move N seconds earlier, "baad mein / later" = later; keep the slot's length (set_timing).
+- "hatao / hata do / remove" = remove_slot (can be restored). "delete / permanently / udaa do" = delete_slot.
+- "small box / chhota box / pip" = pip. "full screen" = overlay. "split / aadha" = split.
+- "poora clip dikhao / zoom mat karo" = show the whole clip (set_framing preset hold). "fill screen / bharo" = fill_screen true.
+- "bada / bigger", "chhota / smaller", "dim / halka" for volume.
 
 How the project works:
-- A "slot" is one B-roll shown over the speaker from `start` to `end` seconds. There are NO timing rules for \
-you: a slot can start at 0 s, be short, and overlap other slots (the one that starts later is drawn on top). Never \
-refuse or move a placement because of timing; do exactly what the user asked and, if it covers another slot, say so \
-in one short line.
-- Layouts: "overlay" (clip fills the screen), "split" (clip on the top half, speaker on the bottom half), "pip" \
-(small picture-in-picture box over the speaker; position and size are adjustable).
+- A "slot" is one B-roll shown over the speaker from `start` to `end` seconds. There are NO timing rules for you: a slot can start at 0 s, be short, and overlap other slots (the one that starts later is drawn on top). Never refuse or move a placement because of timing; do what the user asked and, if it covers another slot, say so in one short line.
+- Layouts: "overlay" (clip fills the screen), "split" (clip on the top half, speaker on the bottom half), "pip" (small picture-in-picture box over the speaker; position and size are adjustable). A clip is shown whole by default (zoom "whole clip"), with a blurred copy behind it.
 - Text overlays are separate from slots and can sit anywhere on the timeline.
-
-Rules:
-- Use ids and times only from get_plan / find_in_transcript / get_transcript. Never invent them. When the user says \
-"where I say X", call find_in_transcript first.
-- Edits apply instantly and the user has an Undo button, so just do what was asked; do not ask for permission for \
-normal edits. Ask a short question only when the request is genuinely ambiguous.
-- After editing, say in one or two lines what you changed (slot ids, times, layout).
-- If a tool returns an error, explain it plainly and fix it if you can (for example a clip that is too short for \
-the slot). Never claim something is done unless a tool call succeeded.
-- You cannot re-plan the whole video or export it; tell the user to use the page's buttons for that.
 
 Pictures and clips:
 - Pictures or videos the user attaches arrive as att_1, att_2... (you can see the pictures). Use place_image / place_video_file with those ids. Never ask the user for a file path.
@@ -54,7 +57,6 @@ Pictures and clips:
 - A YouTube link: place_youtube_clip with the user's time as from_time if they gave one, otherwise describe the moment in `about`. Default clip length 5 seconds unless the user says otherwise.
 - You cannot search the web for pictures or generate pictures. If the user asks for one, tell them to attach the picture (the paperclip in the message box) and say where it should go.
 - If the user asks you to add a NEW picture or clip and has not said how it should look, and you have not asked yet in this chat, call ask_layout, end your reply with one short question and wait for their tap. Do not ask when they already said (full screen / split / small box / corner...), when replacing the clip of an existing slot, or after they have chosen once (reuse that choice unless they change it).
-- Layouts: full screen = overlay, a small box = pip with a position (top-right by default), split = top half.
 - After placing something the user cares about seeing, you may call preview_slot.
 
 Captions:
@@ -65,7 +67,7 @@ Sound effects:
 - With when_phrase it is added at EVERY occurrence by default: tell the user how many it found. "Only the first one" = occurrence first. Default volume is a bit under the voice; "louder" = update_sound with a higher volume.
 - update_sound moves or re-volumes a placed sound, remove_sound deletes one (or all with no id). Ids are in get_plan under sounds.
 
-Current project (may be stale after your own edits; call get_plan for a fresh copy):
+Current project (fresh now; after your own edits call get_plan for new numbers):
 """
 
 
@@ -84,7 +86,7 @@ def build_config(system: str, thinking: bool = True) -> Any:
         system_instruction=system,
         tools=[types.Tool(function_declarations=tools.declarations())],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        temperature=0.4,
+        temperature=0.1,  # editing commands want the same answer every time, not a creative one
         thinking_config=types.ThinkingConfig(thinking_level="low") if thinking else None,
     )
 
@@ -167,6 +169,21 @@ def _describe(exc: Exception | None) -> str:
     return str(exc) if exc else "unknown error"
 
 
+MAX_CHANGE_LINES = 8
+
+
+def changes_text(ctx: ToolContext) -> str:
+    """What the tools REALLY changed in this turn (computed from plan.json before and after each edit), as a short
+    list under the model's own reply. Empty when no edit was made."""
+    if ctx.changes:
+        lines = ctx.changes[:MAX_CHANGE_LINES] + ([f"... and {len(ctx.changes) - MAX_CHANGE_LINES} more"]
+                                                  if len(ctx.changes) > MAX_CHANGE_LINES else [])
+        return "\n\nWhat changed:\n" + "\n".join(f"- {c}" for c in lines)
+    if ctx.no_effect:
+        return "\n\n(Nothing in the project changed.)"
+    return ""
+
+
 def stream_turn(job: Path, history: list[dict], user_text: str, attachments: list[Attachment] | None = None,
                 client: Any = None, models: list[str] | None = None,
                 sleep: Callable[[float], None] = time.sleep,
@@ -229,6 +246,7 @@ def stream_turn(job: Path, history: list[dict], user_text: str, attachments: lis
         return
 
     text = "".join(reply).strip()
+    summary = changes_text(ctx)
     if not finished:
         note = "\n\n(I stopped here to avoid going in circles. Tell me what to do next.)"
         text += note
@@ -236,4 +254,7 @@ def stream_turn(job: Path, history: list[dict], user_text: str, attachments: lis
     elif not text:
         text = ("Done: " + "; ".join(done_labels) + ".") if done_labels else "Okay."
         yield {"type": "text", "text": text}
+    if summary:  # the page's own exact report, so a wrong "done" from the model can always be spotted
+        text += summary
+        yield {"type": "text", "text": summary}
     yield {"type": "done", "text": text, "changed": ctx.changed, "cards": cards}

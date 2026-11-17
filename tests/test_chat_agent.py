@@ -261,14 +261,16 @@ def test_tool_round_trip_edits_the_plan_and_feeds_the_result_back(tmp_path):
     client = FakeClient([chunk(text("On it. "), call("set_layout", slot_id=1, layout="split"))],
                         [chunk(text("Slot 1 is now split."))])
     ev = run_agent(job, client)
-    assert kinds(ev) == ["text", "tool", "text", "done"]
+    assert kinds(ev) == ["text", "tool", "text", "text", "done"]  # the last text is the page's own list of changes
     assert ev[1]["label"] == "Changing slot 1 layout..."
-    assert ev[-1]["changed"] is True and ev[-1]["text"] == "On it. Slot 1 is now split."
+    assert ev[-1]["changed"] is True and ev[-1]["text"].startswith("On it. Slot 1 is now split.")
+    assert "What changed:\n- slot 1: layout overlay -> split" in ev[-1]["text"]
     assert slot(job, 1)["layout"] == "split"
     second = client.models.calls[1]["contents"]
     assert second[-2].role == "model" and second[-2].parts[1].function_call.name == "set_layout"
     resp = second[-1].parts[0].function_response
     assert resp.name == "set_layout" and resp.response["ok"] is True
+    assert resp.response["changes"] == ["slot 1: layout overlay -> split"]  # the model is told what really changed
 
 
 def test_a_tool_error_goes_back_to_the_model_which_can_recover(tmp_path):
@@ -280,13 +282,13 @@ def test_a_tool_error_goes_back_to_the_model_which_can_recover(tmp_path):
     first_resp = client.models.calls[1]["contents"][-1].parts[0].function_response.response
     assert "shorter than 0.3s" in first_resp["error"]
     assert (slot(job, 1)["timestamp_start"], slot(job, 1)["timestamp_end"]) == (3.0, 6.0)
-    assert ev[-1]["changed"] is True and ev[-1]["text"] == "Moved it to 3-6s."
+    assert ev[-1]["changed"] is True and ev[-1]["text"].startswith("Moved it to 3-6s.") and "slot 1: start 2.0 -> 3.0" in ev[-1]["text"]
 
 
 def test_silent_model_after_edits_still_gets_a_summary(tmp_path):
     job = make_job(tmp_path)
     ev = run_agent(job, FakeClient([chunk(call("remove_slot", slot_id=2))], [chunk()]))
-    assert ev[-1]["text"] == "Done: Removing slot 2." and slot(job, 2)["enabled"] is False
+    assert ev[-1]["text"].startswith("Done: Removing slot 2.") and "slot 2: taken off the video" in ev[-1]["text"] and slot(job, 2)["enabled"] is False
 
 
 def test_a_runaway_tool_loop_stops_at_the_round_limit(tmp_path):
@@ -474,3 +476,61 @@ def test_the_chat_uses_a_short_timeout_but_the_planner_keeps_the_long_one(tmp_pa
                         SimpleNamespace(models=FakeModels([[chunk(text("hi"))]])))
     list(agent.stream_turn(make_job(tmp_path), [], "hi", models=["m"]))
     assert seen["t"] == config.CHAT_TIMEOUT_MS == 30_000 < config.GEMINI_TIMEOUT_MS
+
+
+# ----------------------------------------------------------------------------- honest reporting, order, helpful errors
+def test_plan_view_numbers_the_slots_by_place_in_the_timeline(tmp_path):
+    from src.assistant.tools import plan_view
+    job = make_job(tmp_path)
+    assert [(x["n"], x["id"]) for x in plan_view(job)["slots"]] == [(1, 1), (2, 2)]
+    assert plan_view(job)["slots"][0]["zoom"] == "whole clip"
+    run_tool(ctx_for(job), "set_framing", {"slot_id": 1, "fill_screen": True})
+    assert plan_view(job)["slots"][0]["zoom"] == "fill screen"
+
+
+def test_plan_changes_describes_slots_texts_captions_and_sounds():
+    from src.assistant.tools import plan_changes
+    a = {"slots": [{"id": 1, "start": 2, "end": 6, "layout": "overlay", "removed": False, "zoom": "whole clip"}],
+         "texts": [], "sounds": [{"id": 1, "name": "fah", "start": 1.0, "volume": 0.8}],
+         "captions": {"style": "classic", "highlights": []}, "style": "overlay"}
+    b = {"slots": [{"id": 1, "start": 3, "end": 6, "layout": "split", "removed": True, "zoom": "whole clip"},
+                   {"id": 2, "start": 9, "end": 12, "layout": "pip", "removed": False}],
+         "texts": [{"id": 1, "text": "GOAT", "start": 0}], "sounds": [{"id": 1, "name": "fah", "start": 1.0, "volume": 1.2}],
+         "captions": {"style": "bold_pop", "highlights": [{"id": 1}]}, "style": "overlay"}
+    got = plan_changes(a, b)
+    assert "slot 1: start 2 -> 3" in got and "slot 1: layout overlay -> split" in got
+    assert "slot 1: taken off the video (can be restored)" in got and "slot 2: added (9s to 12s, pip)" in got
+    assert "text 1 ('GOAT'): added at 0s" in got and "sound 1 ('fah'): volume 0.8 -> 1.2" in got
+    assert "caption style: classic -> bold_pop" in got and "highlighted words: 0 -> 1" in got
+    assert plan_changes(a, a) == []
+
+
+def test_an_edit_that_changes_nothing_is_reported_as_nothing_changed(tmp_path):
+    job = make_job(tmp_path)
+    ctx = ctx_for(job)
+    out = run_tool(ctx, "set_layout", {"slot_id": 1, "layout": "overlay"})  # it already is overlay
+    assert out["changes"] == [] and "nothing changed" in out["note"] and ctx.no_effect == 1
+    from src.assistant.agent import changes_text
+    assert "Nothing in the project changed" in changes_text(ctx)
+    run_tool(ctx, "set_layout", {"slot_id": 1, "layout": "split"})
+    assert "slot 1: layout overlay -> split" in changes_text(ctx)
+    assert changes_text(ctx_for(job)) == ""  # no edit, no report
+
+
+def test_a_wrong_slot_id_error_lists_the_ids_that_exist(tmp_path):
+    job = make_job(tmp_path)
+    err = run_tool(ctx_for(job), "set_layout", {"slot_id": 9, "layout": "split"})["error"]
+    assert "No B-roll with id 9" in err and "ids that exist: 1, 2" in err
+
+
+def test_set_timing_ignores_a_needless_refetch_so_the_clip_is_not_replaced(tmp_path, monkeypatch):
+    job = make_job(tmp_path)  # slot 1's clip is 9 s long
+    seen = {}
+    real = workflow.set_timing
+
+    def spy(job_dir, item_id, start, end, refetch=False, free=False):
+        seen["refetch"] = refetch
+        return real(job_dir, item_id, start, end, refetch=refetch, free=free)
+    monkeypatch.setattr(workflow, "set_timing", spy)
+    out = run_tool(ctx_for(job), "set_timing", {"slot_id": 1, "start": 2, "end": 8, "refetch": True})
+    assert out["ok"] and seen["refetch"] is False  # 6 s fits in the 9 s clip: nothing to download

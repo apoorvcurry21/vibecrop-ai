@@ -45,6 +45,8 @@ class ToolContext:
     attachments: dict[str, Attachment] = field(default_factory=dict)
     cards: list[dict] = field(default_factory=list)  # things the UI should show in the chat (thumbnails, pickers)
     changed: bool = False  # True once the plan changed, so the page knows to refresh
+    changes: list[str] = field(default_factory=list)  # plain-language list of what the tools really changed
+    no_effect: int = 0  # successful edit calls after which the project was identical (the model may still say "done")
     log: Callable[[str], None] = lambda message: None
 
 
@@ -117,6 +119,14 @@ def _slot_id(args: dict, key: str = "slot_id") -> int:
 
 
 # ----------------------------------------------------------------------------- views the model reads
+def _zoom_label(item: dict) -> str:
+    f = framing_mod.normalize(item.get("framing"))
+    z0, z1 = f["start"]["z"], f["end"]["z"]
+    if z0 == z1 == 1.0:
+        return "fill screen" if f["base"] == "fill" else "whole clip"
+    return f"{'fill ' if f['base'] == 'fill' else ''}zoom {z0:g}x to {z1:g}x"
+
+
 def slot_view(item: dict) -> dict:
     asset = item.get("asset") or {}
     view = {
@@ -126,6 +136,7 @@ def slot_view(item: dict) -> dict:
         "has_clip": asset.get("status") == "ok",
         "source": (asset.get("title") or item.get("search_query") or "")[:70],
         "says": (item.get("english_meaning") or item.get("spoken_text") or "")[:90],
+        "zoom": _zoom_label(item),
     }
     if item.get("layout") == "pip":
         view["pip"] = item.get("pip")
@@ -140,7 +151,7 @@ def plan_view(job: Path) -> dict:
     return {
         "video_topic": plan.get("video_topic", ""), "video_duration": plan.get("video_duration"),
         "style": meta.get("style", "overlay"),
-        "slots": [slot_view(i) for i in items],
+        "slots": [{**slot_view(i), "n": n} for n, i in enumerate(items, 1)],  # n = place in the timeline (1 = first)
         "texts": [{k: t[k] for k in ("id", "text", "start", "end", "pos", "size", "color")}
                   for t in plan.get("texts", [])],
         "free_gaps": [list(g) for g in workflow.free_gaps(job)],
@@ -151,6 +162,48 @@ def plan_view(job: Path) -> dict:
                    for x in plan.get("sounds", [])],
         "can_undo": snapshots.can_undo(job),
     }
+
+
+def plan_changes(before: dict, after: dict) -> list[str]:
+    """What differs between two `plan_view` results, in plain words: this is the page's own, exact report of an edit,
+    so the user does not have to trust the model's description of it."""
+    out: list[str] = []
+
+    def fields(label: str, a: dict, b: dict, keys: tuple[str, ...]) -> None:
+        for k in keys:
+            if a.get(k) != b.get(k):
+                out.append(f"{label}: {k} {a.get(k)} -> {b.get(k)}")
+
+    old = {x["id"]: x for x in before.get("slots", [])}
+    new = {x["id"]: x for x in after.get("slots", [])}
+    for i in sorted(old.keys() | new.keys()):
+        if i not in new:
+            out.append(f"slot {i}: deleted")
+        elif i not in old:
+            out.append(f"slot {i}: added ({new[i]['start']:g}s to {new[i]['end']:g}s, {new[i]['layout']})")
+        else:
+            fields(f"slot {i}", old[i], new[i], ("start", "end", "layout", "pip", "zoom", "source", "kind"))
+            if old[i]["removed"] != new[i]["removed"]:
+                out.append(f"slot {i}: " + ("taken off the video (can be restored)" if new[i]["removed"] else "back on the video"))
+    for kind, key in (("text", "texts"), ("sound", "sounds")):
+        old = {x["id"]: x for x in before.get(key, [])}
+        new = {x["id"]: x for x in after.get(key, [])}
+        for i in sorted(old.keys() | new.keys()):
+            name = (new.get(i) or old.get(i)).get("text") or (new.get(i) or old.get(i)).get("name") or ""
+            if i not in new:
+                out.append(f"{kind} {i} ('{name}'): removed")
+            elif i not in old:
+                out.append(f"{kind} {i} ('{name}'): added at {new[i]['start']:g}s")
+            else:
+                fields(f"{kind} {i} ('{name}')", old[i], new[i], tuple(k for k in new[i] if k not in ("id", "name")))
+    ca, cb = before.get("captions", {}), after.get("captions", {})
+    if ca.get("style") != cb.get("style"):
+        out.append(f"caption style: {ca.get('style')} -> {cb.get('style')}")
+    if ca.get("highlights") != cb.get("highlights"):
+        out.append(f"highlighted words: {len(ca.get('highlights', []))} -> {len(cb.get('highlights', []))}")
+    if before.get("style") != after.get("style"):
+        out.append(f"video style: {before.get('style')} -> {after.get('style')}")
+    return out
 
 
 def plan_summary(job: Path) -> str:
@@ -288,16 +341,21 @@ def _delete_slot(ctx: ToolContext, args: dict) -> dict:
 
 
 @tool("set_timing", "Move or resize a slot on the timeline. No restrictions: it can start at 0 s, be short, or "
-      "overlap other slots. Only the video's length and the slot's clip length limit it (a longer slot needs "
-      "refetch=true, which downloads a longer clip and may pick a different video).",
+      "overlap other slots. Only the video's length and the slot's clip length limit it. Moving a slot or "
+      "making it longer within its clip needs NO refetch. Use refetch=true ONLY after an error said the clip is too "
+      "short: it downloads a different, longer clip and replaces the current one.",
       {"slot_id": _p("integer", "slot id"), "start": _p("number", "new start, seconds"),
-       "end": _p("number", "new end, seconds"), "refetch": _p("boolean", "fetch a longer clip if needed")},
+       "end": _p("number", "new end, seconds"), "refetch": _p("boolean", "only after a 'clip is only N s long' error: replace the clip with a longer one")},
       required=("slot_id", "start", "end"), mutating=True,
       clip_ids=lambda a: _ids("slot_id")(a) if a.get("refetch") else [],
       label=lambda a: f"Retiming slot {a.get('slot_id')}")
 def _set_timing(ctx: ToolContext, args: dict) -> dict:
-    item = workflow.set_timing(ctx.job, _slot_id(args), _num(args, "start"), _num(args, "end"),
-                               refetch=bool(args.get("refetch")), free=True)
+    sid, start, end = _slot_id(args), _num(args, "start"), _num(args, "end")
+    refetch = bool(args.get("refetch"))
+    if refetch:  # a model often sets it "to be safe": that would swap a perfectly good clip for a different video
+        have = workflow._clip_length(ctx.job, workflow._item(workflow.load_plan(ctx.job), sid))
+        refetch = have is None or end - start > have + 0.05
+    item = workflow.set_timing(ctx.job, sid, start, end, refetch=refetch, free=True)
     out = {"ok": True, "slot": slot_view(item)}
     notes = workflow.overlap_notes(ctx.job, item["timestamp_start"], item["timestamp_end"], ignore_id=item["id"])
     return {**out, "notes": notes} if notes else out
@@ -454,6 +512,13 @@ def status_label(name: str, args: dict) -> str:
     return (t.label(args) if t else name) + "..."
 
 
+def _safe_view(job: Path) -> dict | None:
+    try:
+        return plan_view(job)
+    except (OSError, ValueError, KeyError, workflow.WorkflowError):
+        return None
+
+
 def run_tool(ctx: ToolContext, name: str, args: dict | None) -> dict:
     """Run one tool call and return a JSON-able result for the model. Never raises."""
     t = REGISTRY.get(name)
@@ -468,9 +533,18 @@ def run_tool(ctx: ToolContext, name: str, args: dict | None) -> dict:
         if t.mutating:
             snapshots.take(ctx.job, t.label(args) or name, t.clip_ids(args))
             snapped = True
+            before = _safe_view(ctx.job)
         result = t.fn(ctx, args)
         if t.mutating:
             ctx.changed = True
+            after = _safe_view(ctx.job)
+            if before is not None and after is not None and isinstance(result, dict):
+                changes = plan_changes(before, after)
+                result = {**result, "changes": changes}
+                ctx.changes.extend(changes)
+                if not changes:
+                    ctx.no_effect += 1
+                    result["note"] = "The project is identical after this call: nothing changed. Do not say it did."
         return result
     except (ToolError, workflow.WorkflowError) as exc:
         message = str(exc)
