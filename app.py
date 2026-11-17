@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import streamlit as st
@@ -208,12 +209,21 @@ def sfx_panel(job: Path) -> None:
 @st.cache_data(show_spinner=False, max_entries=96)
 def cached_caption_still(style_id: str, chunk_json: str, emphasis_json: str, active: int) -> bytes:
     return preview.caption_frame_png(json.loads(chunk_json), style_id, json.loads(emphasis_json), active=active,
-                                     width=300)
+                                     width=340)
+
+
+HIGHLIGHT_COLORS = {"red": "🔴 Red", "yellow": "🟡 Yellow", "green": "🟢 Green", "blue": "🔵 Blue", "white": "⚪ White"}
+HIGHLIGHT_BIG = 1.4
+
+
+def _step_line(idx_key: str, step: int, count: int) -> None:
+    st.session_state[idx_key] = min(max(st.session_state.get(idx_key, 0) + step, 0), count - 1)
 
 
 @st.fragment
-def captions_panel(job: Path) -> None:
-    """Pick the caption style and make words stand out. A fragment: every click here reruns only this panel."""
+def captions_panel(job: Path, caption_mode: str = "original") -> None:
+    """Pick the caption style and make words stand out. A fragment: every click here reruns only this panel.
+    It shows the captions in the language chosen in the sidebar, the same text the export burns in."""
     plan = workflow.load_plan(job)
     cap = caption_styles.caption_settings(plan)
     style = st.radio("Caption style", caption_styles.style_ids(), index=caption_styles.style_ids().index(cap["style"]),
@@ -223,62 +233,100 @@ def captions_panel(job: Path) -> None:
         cap = caption_styles.caption_settings(workflow.load_plan(job))
     st.caption(caption_styles.STYLES[style]["about"])
 
+    mode = caption_mode if caption_mode in MODES else "original"
+    fail_key = f"capfail_{job.name}_{mode}"
+    if mode != "original" and st.session_state.get(fail_key):
+        st.warning(f"Could not make the {MODES[mode]} captions ({st.session_state[fail_key]}). Showing the original "
+                   "text here; the export tries again.")
+        if st.button("Try the translation again", key=f"capretry_{mode}"):
+            st.session_state.pop(fail_key, None)
+            rerun_fragment()
+        mode = "original"
     try:
-        words = workflow.read_transcript_words(job)
-    except (OSError, ValueError):
-        st.info("There is no transcript for this job, so there is nothing to highlight.")
+        cached = (job / f"captions_{mode}.json").is_file() or mode == "original"
+        with (nullcontext() if cached else st.spinner(f"Making the {MODES[mode]} captions (one AI call, saved)...")):
+            chunks = workflow.caption_lines(job, mode)
+    except workflow.WorkflowError as exc:
+        if mode == "original":
+            st.info("There is no transcript for this job, so there is nothing to highlight.")
+            return
+        st.session_state[fail_key] = str(exc)[:200]
+        rerun_fragment()
         return
-    chunks = caption_styles.fit_chunks(chunk_words(words), caption_styles.STYLES[style]["max_words"])
     if not chunks:
         return
     emphasis = cap["emphasis"]
-    st.markdown("**Make words stand out** (another colour and/or bigger)")
-    idx = st.selectbox("Caption line", range(len(chunks)), key=f"cap_line_{style}",
-                       format_func=lambda i: f"{chunks[i]['start']:.1f}s  ·  " + " ".join(w["text"] for w in chunks[i]["words"]))
+
+    st.markdown("**Make words stand out**")
+    idx_key = f"cap_idx_{style}_{mode}"
+    st.session_state[idx_key] = min(st.session_state.get(idx_key, 0), len(chunks) - 1)
+    n1, n2, n3 = st.columns([1, 1, 6])
+    n1.button("◀", key=f"cap_prev_{style}", on_click=_step_line, args=(idx_key, -1, len(chunks)),
+              help="Previous line", use_container_width=True)
+    n2.button("▶", key=f"cap_next_{style}", on_click=_step_line, args=(idx_key, 1, len(chunks)),
+              help="Next line", use_container_width=True)
+    idx = n3.selectbox("Caption line", range(len(chunks)), key=idx_key, label_visibility="collapsed",
+                       format_func=lambda i: f"Line {i + 1} of {len(chunks)}  ·  {chunks[i]['start']:.1f}s  ·  "
+                       + " ".join(w["text"] for w in chunks[i]["words"]))
     chunk = chunks[idx]
     marked = [j for j, w in enumerate(chunk["words"]) if caption_styles.emphasis_for(w, emphasis)]
-    ver = hashlib.md5(json.dumps([style, idx, emphasis]).encode()).hexdigest()[:6]  # widgets follow what is saved
-    picked = st.pills("Words", list(range(len(chunk["words"]))), selection_mode="multi", default=marked,
+
+    def look() -> tuple[str, float]:
+        return (st.session_state.get("cap_color", "red"), HIGHLIGHT_BIG if st.session_state.get("cap_big") else 1.0)
+
+    def restyle() -> None:  # colour or size changed: the highlighted words of this line follow
+        color, scale = look()
+        fresh = caption_styles.caption_settings(workflow.load_plan(job))["emphasis"]
+        for w in chunk["words"]:
+            if caption_styles.emphasis_for(w, fresh) is not None:
+                workflow.add_emphasis(job, w["start"], w["end"], color, scale, text=w["text"])
+
+    # The picture comes first: it is what the line looks like in the video, highlights included.
+    spoken = next((j for j in range(len(chunk["words"])) if j not in marked), 0)
+    try:
+        st.image(cached_caption_still(style, json.dumps(chunk), json.dumps(emphasis), spoken), width=340,
+                 caption="How this line looks in the video. Your highlights show in the colour you picked.")
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"Preview unavailable: {exc}")
+
+    c1, c2 = st.columns([3, 2])
+    c1.radio("Highlight colour", list(HIGHLIGHT_COLORS), format_func=HIGHLIGHT_COLORS.get, horizontal=True,
+             key="cap_color", on_change=restyle)
+    c2.toggle(f"Bigger ({HIGHLIGHT_BIG:g}x)", key="cap_big", on_change=restyle)
+
+    ver = hashlib.md5(json.dumps([style, mode, idx, emphasis]).encode()).hexdigest()[:6]  # widgets follow what is saved
+    picked = st.pills("Tap a word to highlight it. Tap it again to remove the highlight.",
+                      list(range(len(chunk["words"]))), selection_mode="multi", default=marked,
                       format_func=lambda j: chunk["words"][j]["text"], key=f"cap_words_{ver}") or []
-    c1, c2 = st.columns(2)
-    with c1:
-        use_color = st.checkbox("Change colour", value=True, key=f"cap_usecolor_{ver}")
-        color = st.color_picker("Colour", "#FF3B30", key=f"cap_color_{ver}", disabled=not use_color)
-    with c2:
-        scale = st.select_slider("Size", [1.0, 1.2, 1.4, 1.6, 1.8], value=1.4, key=f"cap_scale_{ver}",
-                                 format_func=lambda s: "normal" if s == 1.0 else f"{s:g}x")
-    b1, b2, b3 = st.columns(3)
+    if set(picked) != set(marked):
+        color, scale = look()
+        try:
+            for j, w in enumerate(chunk["words"]):
+                hit = caption_styles.emphasis_for(w, emphasis)
+                if j in picked and j not in marked:
+                    workflow.add_emphasis(job, w["start"], w["end"], color, scale, text=w["text"])
+                elif j not in picked and hit is not None:
+                    workflow.remove_emphasis(job, hit["id"])
+        except workflow.WorkflowError as exc:
+            fail(exc)
+        rerun_fragment()
+
+    b1, b2, _ = st.columns([2, 2, 3])
     with b1:
-        if st.button("Apply to this line", key=f"cap_apply_{ver}", type="primary"):
-            try:
-                for j, w in enumerate(chunk["words"]):
-                    hit = caption_styles.emphasis_for(w, emphasis)
-                    if j in picked:
-                        workflow.add_emphasis(job, w["start"], w["end"], color if use_color else None, scale,
-                                              text=w["text"])
-                    elif hit is not None:
-                        workflow.remove_emphasis(job, hit["id"])
-            except workflow.WorkflowError as exc:
-                fail(exc)
-            rerun_fragment()
-    with b2:
-        if st.button("Clear this line", key=f"cap_clear_{ver}", disabled=not marked):
+        if st.button("Clear this line", key=f"cap_clear_{ver}", disabled=not marked, use_container_width=True):
             for j in marked:
                 hit = caption_styles.emphasis_for(chunk["words"][j], emphasis)
                 if hit is not None:
                     workflow.remove_emphasis(job, hit["id"])
             rerun_fragment()
-    with b3:
-        if st.button("Clear all highlights", key=f"cap_clearall_{ver}", disabled=not emphasis):
+    with b2:
+        if st.button("Clear all highlights", key=f"cap_clearall_{ver}", disabled=not emphasis,
+                     use_container_width=True):
             workflow.remove_emphasis(job)
             rerun_fragment()
-    try:
-        st.image(cached_caption_still(style, json.dumps(chunk), json.dumps(emphasis), picked[0] if picked else 0),
-                 caption="Preview (the word being spoken is marked by the style)")
-    except Exception as exc:  # noqa: BLE001
-        st.caption(f"Preview unavailable: {exc}")
     if emphasis:
-        st.caption(f"{len(emphasis)} highlighted: " + ", ".join(e.get("text") or f"{e['start']:.1f}s" for e in emphasis[:12])
+        st.caption(f"{len(emphasis)} highlighted in the whole video: "
+                   + ", ".join(e.get("text") or f"{e['start']:.1f}s" for e in emphasis[:12])
                    + (" ..." if len(emphasis) > 12 else ""))
 
 
@@ -506,7 +554,8 @@ with st.sidebar:
         format_func=lambda c: f"{workflow.SPOKEN_LANGUAGES[c]} ({c})", key="spoken",
     )
     captions_on = st.checkbox("Burn in captions", value=True)
-    caption_mode = st.radio("Caption language", list(MODES), format_func=MODES.get, disabled=not captions_on)
+    caption_mode = st.radio("Caption language", list(MODES), format_func=MODES.get, disabled=not captions_on,
+                            key="cap_mode")
     auto_clean = st.checkbox(
         "Delete temporary clips after render", value=True,
         help="Keeps only final.mp4 and the JSON files. Untick it to try another caption language without re-downloading.",
@@ -784,7 +833,7 @@ with st.expander("Add your own picture or video"):
 
 # ---------------------------------------------------------------- captions: style + highlighted words
 with st.expander("Captions: style and highlighted words"):
-    captions_panel(job)
+    captions_panel(job, caption_mode)
 
 # ---------------------------------------------------------------- sound effects
 with st.expander(f"Sound effects ({len(plan.get('sounds', []))})"):

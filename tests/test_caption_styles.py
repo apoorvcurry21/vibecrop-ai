@@ -260,14 +260,51 @@ def test_panel_changes_the_style_and_applies_a_highlight(tmp_path, monkeypatch):
     at.radio(key="cap_style").set_value("bold_pop").run()
     assert not at.exception and workflow.load_plan(job)["captions"]["style"] == "bold_pop"
     assert at.get("image")  # the caption preview still
-    assert [b.label for b in at.button if b.label in ("Apply to this line", "Clear all highlights")] == [
-        "Apply to this line", "Clear all highlights"]
+    assert [b.label for b in at.button if b.label in ("Clear this line", "Clear all highlights")] == [
+        "Clear this line", "Clear all highlights"]
     assert next(b for b in at.button if b.label == "Clear all highlights").disabled  # nothing highlighted yet
     workflow.add_emphasis(job, 7.0, 7.3, color="red", text="virat")
     at.run()
     assert not next(b for b in at.button if b.label == "Clear all highlights").disabled
     next(b for b in at.button if b.label == "Clear all highlights").click().run()
     assert not at.exception and workflow.load_plan(job)["captions"]["emphasis"] == []
+
+
+def test_panel_shows_the_chosen_caption_language_and_a_tap_highlights_a_word(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIBECROP_WORKDIR", str(tmp_path))
+    job = make_job(tmp_path)
+    (job / "captions_english.json").write_text(json.dumps([{"id": 0, "start": 7.0, "end": 8.0, "words": [
+        {"text": "Namaste", "start": 7.0, "end": 7.4}, {"text": "friends", "start": 7.5, "end": 7.9}]}]))
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["job_dir"] = str(job)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    spoken_label = " ".join(at.pills[0].options)
+    at.radio(key="cap_mode").set_value("english").run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.pills[0].options == ["Namaste", "friends"] and "Namaste" not in spoken_label  # the chosen language
+    at.pills[0].set_value([1]).run()  # tap "friends"
+    emph = workflow.load_plan(job)["captions"]["emphasis"]
+    assert len(emph) == 1 and emph[0]["text"] == "friends" and emph[0]["color"] == "FF3B30"
+    at.toggle(key="cap_big").set_value(True).run()  # a bigger size follows on the highlighted word
+    assert workflow.load_plan(job)["captions"]["emphasis"][0]["scale"] == 1.4
+    at.pills[0].set_value([]).run()  # tap it again
+    assert workflow.load_plan(job)["captions"]["emphasis"] == []
+    lines = workflow.caption_lines(job, "english")
+    assert [w["text"] for w in lines[0]["words"]] == ["Namaste", "friends"]
+    assert workflow.caption_lines(job, "no-such-mode") == workflow.caption_lines(job, "original")  # falls back
+
+
+def test_caption_lines_error_when_the_rewrite_fails_and_nothing_is_cached(tmp_path, monkeypatch):
+    from src.captions.rewrite import CaptionError
+    job = make_job(tmp_path)
+
+    def boom(*a, **k):
+        raise CaptionError("no quota")
+    monkeypatch.setattr(workflow.rendering, "load_caption_chunks", boom)
+    with pytest.raises(workflow.WorkflowError, match="no quota"):
+        workflow.caption_lines(job, "english")
+    assert not (job / "captions_english.json").exists()
 
 
 # ---- the real export -----------------------------------------------------------------------------------------------------

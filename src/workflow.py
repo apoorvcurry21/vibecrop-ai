@@ -9,6 +9,7 @@ from typing import Callable
 
 from src import config, perf
 from src.captions import styles as caption_styles
+from src.captions.rewrite import MODES, CaptionError
 from src.cleanup import purge_job_temp
 from src.fileio import write_json_atomic
 from src.planning import pipeline as planning
@@ -734,6 +735,23 @@ def set_caption_style(job_dir: Path, style_id: str) -> str:
     _captions(plan)["style"] = style_id
     _save(job_dir, plan)
     return style_id
+
+
+def caption_lines(job_dir: Path, mode: str | None, client=None) -> list[dict]:
+    """The caption lines exactly as the export burns them in: the chosen caption language (English / Hinglish are a
+    Gemini rewrite, cached per job in captions_<mode>.json, the same file the render uses), split to the style's
+    words per line. Raises WorkflowError when there is no transcript or the rewrite fails (nothing is cached then)."""
+    f = job_dir / "transcript.json"
+    if not f.is_file():
+        raise WorkflowError("There is no transcript for this job.")
+    mode = mode if mode in MODES else "original"
+    plan = load_plan(job_dir)
+    try:
+        chunks = rendering.load_caption_chunks(job_dir, mode, json.loads(f.read_text(encoding="utf-8")),
+                                               rendering.caption_context(plan), client)
+    except CaptionError as exc:
+        raise WorkflowError(str(exc)) from exc
+    return caption_styles.fit_chunks(chunks, caption_styles.get_style(caption_styles.caption_settings(plan)["style"])["max_words"])
 
 
 def add_emphasis(job_dir: Path, start: float, end: float, color=None, scale=None, text: str = "") -> dict:
