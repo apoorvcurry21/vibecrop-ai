@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
+import httpx
+
 from src.config import GEMINI_TIMEOUT_MS, gemini_fallback_models, gemini_model, get_secret
 
 TRANSIENT_CODES = {429, 500, 503, 504}
@@ -48,6 +50,8 @@ def generate(client: Any, model: str, history: list, sleep: Callable[[float], No
                 sleep(5 * attempt)
                 continue
             raise GeminiError(f"Gemini request failed: {exc}") from exc
+        except (httpx.HTTPError, OSError) as exc:  # read timeout, dropped connection: not an APIError, no retry here
+            raise GeminiError(f"Gemini network error: {exc}") from exc
     raise GeminiError("Gemini request failed after retries.")
 
 

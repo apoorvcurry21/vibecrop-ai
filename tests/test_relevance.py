@@ -81,6 +81,25 @@ def test_trouble_means_unknown_never_a_rejection_and_repeated_trouble_pauses_the
     assert not chk.paused()
 
 
+@needs_ffmpeg
+def test_a_network_timeout_is_just_unknown_too(tmp_path):
+    """Regression: 'The read operation timed out' (httpx.ReadTimeout) used to escape and fail the whole job."""
+    import httpx
+
+    clip = make_clip(tmp_path / "c.mp4")
+    chk = relevance.Checker(client(httpx.ReadTimeout("The read operation timed out")), models=["m"])
+    assert chk.check(clip, 5.0, "x", "y") == (None, "")
+
+
+def test_one_crashing_slot_does_not_take_the_job_down(monkeypatch, tmp_path):
+    def boom(job_dir, item, skip_ids=frozenset(), checker=None):
+        raise RuntimeError("something unexpected")
+
+    monkeypatch.setattr(pipeline, "source_item", boom)
+    out = pipeline._source_safely(tmp_path, {"id": 1}, set())
+    assert out["status"] == "failed" and "something unexpected" in out["error"]
+
+
 def test_a_missing_key_or_an_unreadable_clip_is_just_unknown(tmp_path, monkeypatch):
     monkeypatch.setattr(relevance, "make_client", lambda *a, **k: (_ for _ in ()).throw(config.ConfigError("no key")))
     chk = relevance.Checker(models=["m"])

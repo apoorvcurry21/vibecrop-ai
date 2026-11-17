@@ -36,6 +36,8 @@ def _source_safely(job_dir: Path, item: dict, skip_ids: set[str]) -> dict:
         return source_item(job_dir, item, skip_ids=skip_ids)
     except SourcingError as exc:
         return {"status": "failed", "error": str(exc)}
+    except Exception as exc:  # anything unexpected (network, ffmpeg, ...) fails this slot only; "Regenerate" can retry
+        return {"status": "failed", "error": f"{type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ''}"}
 
 
 def run(job_dir: str | Path, only: list[int] | None = None, force: bool = False,
