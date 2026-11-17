@@ -62,7 +62,7 @@ def fail(exc: Exception) -> None:
 
 LAYOUT_LABELS = {"overlay": "Overlay (full screen)", "split": "Split (b-roll on top, facecam below)",
                  "pip": "Picture-in-picture (small box over you)"}
-ZOOM_SLOW = 1.6  # how close the slow 'Zoom in' / 'Zoom out' gets (the same value the chat's presets use)
+ZOOM_SLOW = 1.3  # how close the slow 'Zoom in' / 'Zoom out' gets (the same value the chat's presets use)
 LAYOUT_COLORS = {"overlay": "#3b82f6", "split": "#10b981", "pip": "#f59e0b"}
 PIP_POSITION_LABELS = {"top-left": "Top left", "top": "Top", "top-right": "Top right", "center": "Center",
                        "bottom-left": "Bottom left", "bottom": "Bottom", "bottom-right": "Bottom right"}
@@ -490,28 +490,33 @@ def slot_editor(job: Path, item_id: int) -> None:
         st.caption("No clip to zoom yet.")
         return
     z0, z1 = float(saved["start"]["z"]), float(saved["end"]["z"])
+    base = saved["base"]
     is_static = abs(z1 - z0) < 1e-6
+    whole = "the whole clip is shown" if base == "fit" else "the clip fills the screen and its edges are cropped"
     if is_static:
-        now = "no zoom" if z0 <= 1.0 + 1e-6 else f"zoomed in {z0:g}x the whole time"
+        now = whole if z0 <= 1.0 + 1e-6 else f"zoomed in {z0:g}x the whole time"
     else:
         now = f"slowly zooms {'in' if z1 > z0 else 'out'} ({z0:g}x to {z1:g}x)"
     st.markdown(f"**Zoom**: now {now}")
 
-    def centred(start_z: float, end_z: float) -> dict:
-        return {"start": {"z": start_z, "x": 0.5, "y": 0.5}, "end": {"z": end_z, "x": 0.5, "y": 0.5}}
+    def centred(start_z: float, end_z: float, base: str = base) -> dict:
+        return {"base": base, "start": {"z": start_z, "x": 0.5, "y": 0.5}, "end": {"z": end_z, "x": 0.5, "y": 0.5}}
 
-    zc = st.columns(3)
-    for col, label, (za, zb) in zip(zc, ("Zoom in", "Zoom out", "No zoom"), ((1.0, ZOOM_SLOW), (ZOOM_SLOW, 1.0), (1.0, 1.0))):
+    choices = (
+        ("Zoom in", centred(1.0, ZOOM_SLOW, "fit"), "Starts with the whole clip and slowly gets closer."),
+        ("Zoom out", centred(ZOOM_SLOW, 1.0, "fit"), "Starts close and slowly pulls back to the whole clip."),
+        ("No zoom", centred(1.0, 1.0, "fit"),
+         "The whole clip is shown, nothing is cut. A blurred copy fills the empty space."),
+        ("Fill screen", centred(1.0, 1.0, "fill"), "The clip is blown up to fill the screen, so its edges are cut off."),
+    )
+    for col, (label, framing, hint) in zip(st.columns(4), choices):
         with col:
-            if st.button(label, key=k("z" + label), use_container_width=True,
-                         help={"Zoom in": "Starts normal and slowly gets closer.",
-                               "Zoom out": "Starts close and slowly pulls back.",
-                               "No zoom": "The clip just fills the screen."}[label]):
-                workflow.set_framing(job, item_id, centred(za, zb))
+            if st.button(label, key=k("z" + label), use_container_width=True, help=hint):
+                workflow.set_framing(job, item_id, framing)
                 rerun_fragment()
     held = z0 if is_static else 1.0
-    level = st.slider("Or hold one zoom level the whole time (1x = no zoom)", 1.0, framing_mod.MAX_ZOOM, held, 0.05,
-                      key=k("zlevel"))
+    level = st.slider(f"Or hold one zoom level the whole time (1x = {'whole clip' if base == 'fit' else 'fills the screen'})",
+                      1.0, framing_mod.MAX_ZOOM, held, 0.05, key=k("zlevel"))
     if abs(level - held) > 1e-6:
         workflow.set_framing(job, item_id, centred(level, level))
         rerun_fragment()

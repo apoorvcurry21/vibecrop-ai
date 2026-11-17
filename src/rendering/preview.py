@@ -42,11 +42,14 @@ def frame_png(clip: Path, framing: dict | None, layout: str, duration: float, at
     box for pip): `at` = "start" or "end" keyframe, i.e. the first or the last frame of the slot."""
     w, h = box_for(layout, pip)
     sw, sh = probe_size(clip)
-    chain = fr.clip_filter(framing, duration, w, h, sw, sh, FPS)
+    if layout == "pip":  # a small box is always filled, never letterboxed (same rule as the render)
+        graph = f"[0:v]{fr.clip_filter(framing, duration, w, h, sw, sh, FPS)}[s]"
+    else:
+        graph = fr.clip_graph(framing, duration, w, h, sw, sh, FPS, "0:v", "s", 0)
     last = max(0, int(min(duration, clip_len or duration) * FPS) - 1)
     n = 0 if at == "start" else last
-    return _ffmpeg_png(["-an", "-t", f"{duration:.3f}", "-i", str(clip), "-vf",
-                        f"{chain},select=eq(n\\,{n}),scale={PREVIEW_W}:-2"])
+    return _ffmpeg_png(["-an", "-t", f"{duration:.3f}", "-i", str(clip), "-filter_complex",
+                        f"{graph};[s]select=eq(n\\,{n}),scale={PREVIEW_W}:-2[v]", "-map", "[v]"])
 
 
 def caption_frame_png(chunk: dict, style_id: str, emphasis: list[dict] | None = None, active: int = 0,

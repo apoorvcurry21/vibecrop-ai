@@ -119,7 +119,7 @@ def test_set_framing_clamps_values(tmp_path):
     job = make_job(tmp_path)
     workflow.set_framing(job, 3, {"start": {"z": 9, "x": -2}, "end": {"z": 1.5, "x": 0.9, "y": 0.1}})
     f = item(job, 3)["framing"]
-    assert f["start"] == {"z": 3.0, "x": 0.0, "y": 0.5} and f["end"] == {"z": 1.5, "x": 0.9, "y": 0.1}
+    assert f["start"] == {"z": 4.0, "x": 0.0, "y": 0.5} and f["end"] == {"z": 1.5, "x": 0.9, "y": 0.1}
 
 
 def test_set_layout_validates(tmp_path):

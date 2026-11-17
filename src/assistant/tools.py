@@ -23,7 +23,7 @@ from src.rendering.compose import PIP_POSITIONS
 MAX_TRANSCRIPT_CHARS = 9000
 SHORT_WORD = 3  # words this short (or shorter) must match exactly in find_phrase
 FRAMING_PRESETS = {  # (zoom at the start, zoom at the end), always centred
-    "zoom_in": (1.0, 1.6), "zoom_out": (1.6, 1.0), "hold": (1.0, 1.0), "hold_zoomed": (1.4, 1.4),
+    "zoom_in": (1.0, 1.3), "zoom_out": (1.3, 1.0), "hold": (1.0, 1.0), "hold_zoomed": (1.4, 1.4),
 }
 
 
@@ -331,10 +331,13 @@ def _set_pip(ctx: ToolContext, args: dict) -> dict:
     return {"ok": True, "slot": slot_view(item)}
 
 
-@tool("set_framing", "Zoom/pan animation of a slot's clip. Use a preset, or set zoom (1 = fill, up to 3) and pan "
-      "(0..1, 0.5 = centre) for the start and end of the slot; unspecified values keep their current setting.",
+@tool("set_framing", "Zoom/pan animation of a slot's clip. By default a clip is shown WHOLE (zoom 1 = nothing cut, the "
+      "empty space is a blurred copy). Use a preset, or set zoom (1 = whole clip, up to 4) and pan (0..1, 0.5 = "
+      "centre) for the start and end of the slot; unspecified values keep their current setting. fill_screen=true "
+      "blows the clip up to fill the screen instead (edges are cut off).",
       {"slot_id": _p("integer", "slot id"),
-       "preset": _p("string", "zoom_in, zoom_out, hold or hold_zoomed", list(FRAMING_PRESETS)),
+       "preset": _p("string", "zoom_in, zoom_out, hold (no zoom) or hold_zoomed", list(FRAMING_PRESETS)),
+       "fill_screen": _p("boolean", "true = fill the whole box and cut the clip's edges, false = show the whole clip"),
        "zoom_start": _p("number", "zoom at the start"), "zoom_end": _p("number", "zoom at the end"),
        "pan_x_start": _p("number", "0 left .. 1 right, at the start"), "pan_x_end": _p("number", "same, at the end"),
        "pan_y_start": _p("number", "0 top .. 1 bottom, at the start"), "pan_y_end": _p("number", "same, at the end")},
@@ -347,7 +350,9 @@ def _set_framing(ctx: ToolContext, args: dict) -> dict:
         if args["preset"] not in FRAMING_PRESETS:
             raise ToolError(f"Unknown preset. Choose one of: {', '.join(FRAMING_PRESETS)}.")
         z0, z1 = FRAMING_PRESETS[args["preset"]]
-        cur = {"start": {"z": z0, "x": 0.5, "y": 0.5}, "end": {"z": z1, "x": 0.5, "y": 0.5}}
+        cur = {"base": "fit", "start": {"z": z0, "x": 0.5, "y": 0.5}, "end": {"z": z1, "x": 0.5, "y": 0.5}}
+    if args.get("fill_screen") is not None:
+        cur["base"] = "fill" if args["fill_screen"] else "fit"
     for end in ("start", "end"):
         for key, arg in (("z", "zoom"), ("x", "pan_x"), ("y", "pan_y")):
             v = _opt_num(args, f"{arg}_{end}")

@@ -179,7 +179,7 @@ def test_slot_editor_opens_with_sliders_and_previews(tmp_path, monkeypatch):
     assert len(at.get("image")) == 2 + 2  # one list still per slot + the editor's first-frame and last-frame stills
     assert button(at, "Swap with previous").disabled and not button(at, "Swap with next").disabled
     assert not [b for b in at.button if b.label == "Save framing"]  # every zoom click saves on its own
-    assert any("Zoom" in m.value and "no zoom" in m.value for m in at.markdown)
+    assert any("Zoom" in m.value and "the whole clip is shown" in m.value for m in at.markdown)
 
 
 @needs_ffmpeg
@@ -202,14 +202,19 @@ def test_zoom_buttons_save_at_once_and_always_centre(tmp_path, monkeypatch):
     job, at = open_editor(tmp_path, monkeypatch)
     button(at, "Zoom in").click().run()
     saved = workflow.load_plan(job)["items"][0]["framing"]
-    assert (saved["start"]["z"], saved["end"]["z"]) == (1.0, 1.6)
+    assert (saved["start"]["z"], saved["end"]["z"]) == (1.0, 1.3)
     assert all(saved[k]["x"] == 0.5 and saved[k]["y"] == 0.5 for k in ("start", "end"))
     assert any("slowly zooms in" in m.value for m in at.markdown)
     button(at, "Zoom out").click().run()
     saved = workflow.load_plan(job)["items"][0]["framing"]
-    assert (saved["start"]["z"], saved["end"]["z"]) == (1.6, 1.0)
+    assert (saved["start"]["z"], saved["end"]["z"]) == (1.3, 1.0)
+    assert saved["base"] == "fit"
     button(at, "No zoom").click().run()
     assert workflow.load_plan(job)["items"][0]["framing"]["end"]["z"] == 1.0
+    button(at, "Fill screen").click().run()  # the old look: blown up to fill, the edges are cut
+    saved = workflow.load_plan(job)["items"][0]["framing"]
+    assert saved["base"] == "fill" and saved["start"]["z"] == saved["end"]["z"] == 1.0
+    assert any("edges are cropped" in m.value for m in at.markdown)
     assert not at.exception, [e.value for e in at.exception]
 
 

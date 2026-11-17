@@ -15,7 +15,7 @@ from typing import Callable
 
 from src import config
 from src.config import require_binary
-from src.rendering.framing import clip_filter, fill_crop, is_default
+from src.rendering.framing import clip_filter, clip_graph, fill_crop, is_default, uses_fit
 
 OUT_W, OUT_H, FPS = 1080, 1920, 30
 SPLIT_Y = OUT_H // 2  # the border sits on this line: b-roll above, facecam below
@@ -208,23 +208,26 @@ def build_filtergraph(overlays: list[Overlay], subtitles_file: str | None = None
         w, h = box_for(ov.layout, ov.pip)
         dur = ov.end - ov.start
         # Clip timestamps are shifted to start at the slot's start, so frames line up with the speaker.
-        chain = clip_filter(ov.framing, dur, w, h, ov.src_w, ov.src_h, fps)
+        if ov.layout == "pip":  # a small box is always filled, never letterboxed
+            parts.append(f"[{n}:v]{clip_filter(ov.framing, dur, w, h, ov.src_w, ov.src_h, fps)}[s{n}]")
+        else:
+            parts.append(clip_graph(ov.framing, dur, w, h, ov.src_w, ov.src_h, fps, f"{n}:v", f"s{n}", n))
         gate = f"enable='between(t,{ov.start:.3f},{ov.end:.3f})'"
         if ov.layout == "pip":
             _, _, px, py = pip_geometry(ov.pip)
-            parts.append(f"[{n}:v]{chain},format=yuv420p,tpad=stop_mode=clone:stop_duration={dur:.3f},"
+            parts.append(f"[s{n}]format=yuv420p,tpad=stop_mode=clone:stop_duration={dur:.3f},"
                          f"drawbox=x=0:y=0:w=iw:h=ih:color={BORDER_COLOR}:t={PIP_BORDER},"
                          f"setpts=PTS+{ov.start:.3f}/TB[c{n}]")
             parts.append(f"[b{n - 1}][c{n}]overlay={px}:{py}:{gate}:eof_action=pass[b{n}]")
             continue
         if ov.layout != "split":
-            parts.append(f"[{n}:v]{chain},format=yuv420p,setpts=PTS+{ov.start:.3f}/TB[c{n}]")
+            parts.append(f"[s{n}]format=yuv420p,setpts=PTS+{ov.start:.3f}/TB[c{n}]")
             parts.append(f"[b{n - 1}][c{n}]overlay={gate}:eof_action=pass[b{n}]")
             continue
         k += 1
         # Freeze the last frame if the clip is a little shorter than the slot, so the top half never flashes
         # the speaker.
-        parts.append(f"[{n}:v]{chain},format=yuv420p,tpad=stop_mode=clone:stop_duration={dur:.3f},"
+        parts.append(f"[s{n}]format=yuv420p,tpad=stop_mode=clone:stop_duration={dur:.3f},"
                      f"setpts=PTS+{ov.start:.3f}/TB[c{n}]")
         parts.append(f"[m{k}]crop={OUT_W}:{SPLIT_H}:0:{face_top},setsar=1[f{n}]")
         parts.append(f"[b{n - 1}][c{n}]overlay=0:0:{gate}:eof_action=pass[t{n}]")
@@ -322,8 +325,8 @@ def render(main_video: Path, overlays: list[Overlay], out_path: Path,
     `scale_to` shrinks the finished frame (draft previews).
     """
     ffmpeg = require_binary("ffmpeg")
-    for ov in overlays:  # zoom/pan needs the clip's real size
-        if not is_default(ov.framing) and not (ov.src_w and ov.src_h):
+    for ov in overlays:  # fill-style zoom/pan needs the clip's real size; the fit path uses it to skip a needless backdrop
+        if (uses_fit(ov.framing) or not is_default(ov.framing)) and not (ov.src_w and ov.src_h):
             ov.src_w, ov.src_h = probe_size(ov.path)
     cmd = [ffmpeg, "-nostdin", "-y", "-loglevel", "error", "-i", str(main_video)]
     for ov in overlays:

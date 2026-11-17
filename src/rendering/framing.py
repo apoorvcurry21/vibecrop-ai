@@ -4,22 +4,29 @@ top half of a split layout).
 This module is the single source of truth for the crop. The renderer (`compose.py`) and the editor preview
 (`preview.py`) both call it, so what the user sees while adjusting zoom/pan is what ends up in the video.
 
-Model: two keyframes, `start` and `end`, each `{z, x, y}`:
-  z = zoom, 1.0 (fill the box, like the old centre crop) to MAX_ZOOM;
-  x, y = pan, 0..1 (0.5 = centre), the position of the crop window inside the zoomed clip.
+Model: a `base` and two keyframes, `start` and `end`, each `{z, x, y}`:
+  base "fit" (the default): z = 1.0 shows the WHOLE clip inside the box, nothing is cut; the empty space is filled
+    with a blurred copy of the clip. Zooming in (z > 1) goes from there.
+  base "fill": z = 1.0 fills the box and crops the clip's edges (the old behaviour; "Fill screen" in the editor).
+  z = zoom, 1.0 to MAX_ZOOM;
+  x, y = pan, 0..1 (0.5 = centre), the position of the window inside a clip that is bigger than the box.
 The values are interpolated linearly over the slot, so `start` is the first frame and `end` the last.
+Picture-in-picture boxes always use the fill behaviour.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 
-MIN_ZOOM, MAX_ZOOM = 1.0, 3.0
+MIN_ZOOM, MAX_ZOOM = 1.0, 4.0
+BASES = ("fit", "fill")
+BLUR_DIV = 8  # the blurred backdrop is made at 1/8 size and scaled up: cheap, and it is blurry anyway
+SAME_SHAPE = 0.02  # a clip within 2% of the box's shape has no bars to fill: fit and fill are the same
 DEFAULT_KEYFRAME = {"z": 1.0, "x": 0.5, "y": 0.5}
 STATIC_EPS = 1e-6
 
 
 def default_framing() -> dict:
-    return {"start": dict(DEFAULT_KEYFRAME), "end": dict(DEFAULT_KEYFRAME)}
+    return {"base": "fit", "start": dict(DEFAULT_KEYFRAME), "end": dict(DEFAULT_KEYFRAME)}
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -36,11 +43,18 @@ def _keyframe(raw: dict | None) -> dict:
 
 
 def normalize(framing: dict | None) -> dict:
-    """Clamp and complete a framing dict. Missing/None means the default centre fill (old behaviour)."""
+    """Clamp and complete a framing dict. Missing/None means the default: the whole clip, centred.
+
+    A saved framing without a `base` is from before the fit mode: untouched ones (z=1, centred) become "fit" like every
+    new slot, ones the user zoomed/panned keep the fill behaviour they were set up with."""
     framing = framing or {}
     start = _keyframe(framing.get("start"))
     end = _keyframe(framing.get("end", framing.get("start")))
-    return {"start": start, "end": end}
+    base = framing.get("base")
+    if base not in BASES:
+        untouched = start == end == _keyframe(DEFAULT_KEYFRAME)
+        base = "fit" if untouched else "fill"
+    return {"base": base, "start": start, "end": end}
 
 
 def is_static(framing: dict | None) -> bool:
@@ -111,8 +125,10 @@ def fill_crop(w: int, h: int) -> str:
 
 
 def is_default(framing: dict | None) -> bool:
-    """True for the untouched framing (z=1, centred): it keeps the original fill-crop filter exactly."""
-    return normalize(framing) == default_framing()
+    """True when the keyframes are untouched (z=1, centred), whatever the base. For the fill behaviour (and always
+    for pip) that keeps the original fill-crop filter exactly."""
+    f = normalize(framing)
+    return f["start"] == f["end"] == _keyframe(DEFAULT_KEYFRAME)
 
 
 def clip_filter(framing: dict | None, duration: float, w: int, h: int,
@@ -124,6 +140,39 @@ def clip_filter(framing: dict | None, duration: float, w: int, h: int,
     if not (src_w and src_h):
         raise ValueError("The clip's width and height are needed to apply zoom/pan.")
     return framing_filter(framing, duration, w, h, src_w, src_h, fps)
+
+
+def uses_fit(framing: dict | None, src_w: int = 0, src_h: int = 0, w: int = 0, h: int = 0) -> bool:
+    """True when the clip is shown whole with a blurred backdrop. A clip that already has the box's shape (a vertical
+    clip in the 9:16 frame) has no bars to fill, so it takes the plain fill path (identical picture, cheaper)."""
+    if normalize(framing)["base"] != "fit":
+        return False
+    return not (src_w and src_h and w and h and abs((src_w / src_h) / (w / h) - 1) < SAME_SHAPE)
+
+
+def clip_graph(framing: dict | None, duration: float, w: int, h: int, src_w: int, src_h: int, fps: int,
+               src: str, out: str, tag: str | int) -> str:
+    """Filter-graph piece `[src]...[out]` that turns a clip into exactly w x h. This is what both the final render and
+    the editor preview use. `tag` keeps the inner labels unique when several slots are in one graph.
+
+    Fit: the whole clip is scaled to fit inside the box (times the zoom), centred (or panned, when zoomed past the box)
+    on a blurred copy of itself. It needs no source size: the filters read the real one."""
+    f = normalize(framing)
+    if not uses_fit(f, src_w, src_h, w, h):
+        return f"[{src}]{clip_filter(f, duration, w, h, src_w, src_h, fps)}[{out}]"
+    s, e = f["start"], f["end"]
+    zoom = _lerp(s["z"], e["z"], duration)
+    px, py = _lerp(s["x"], e["x"], duration), _lerp(s["y"], e["y"], duration)
+    fit = f"min({w}/iw,{h}/ih)"
+    frame_eval = "" if is_static(f) else ":eval=frame"
+    bw, bh = max(2, w // BLUR_DIV // 2 * 2), max(2, h // BLUR_DIV // 2 * 2)
+    return (
+        f"[{src}]setpts=PTS-STARTPTS,fps={fps},split[a{tag}][b{tag}];"
+        f"[a{tag}]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},boxblur=6:2,"
+        f"scale={w}:{h}:flags=bilinear,setsar=1[g{tag}];"
+        f"[b{tag}]scale=w='trunc({fit}*iw*{zoom}/2)*2':h='trunc({fit}*ih*{zoom}/2)*2'{frame_eval}:flags=bicubic[f{tag}];"
+        f"[g{tag}][f{tag}]overlay=x='if(gt(w,W),(W-w)*{px},(W-w)/2)':y='if(gt(h,H),(H-h)*{py},(H-h)/2)',setsar=1[{out}]"
+    )
 
 
 def with_framing(item: dict) -> dict:

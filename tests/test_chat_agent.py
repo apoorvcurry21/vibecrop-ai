@@ -139,9 +139,12 @@ def test_text_framing_pip_and_style_tools(tmp_path):
     assert run_tool(ctx, "update_text", {"text_id": 1, "text": "GOAT!!", "color": "red"})["text"]["color"] == "red"
     assert run_tool(ctx, "remove_text", {"text_id": 1})["ok"] and workflow.load_plan(job)["texts"] == []
     z = run_tool(ctx, "set_framing", {"slot_id": 1, "preset": "zoom_in"})["framing"]
-    assert z["start"]["z"] == 1.0 and z["end"]["z"] == 1.6
+    assert z["start"]["z"] == 1.0 and z["end"]["z"] == 1.3 and z["base"] == "fit"
     z = run_tool(ctx, "set_framing", {"slot_id": 1, "zoom_end": 2.0, "pan_x_end": 0.2})["framing"]
     assert z["end"]["z"] == 2.0 and z["end"]["x"] == 0.2 and z["start"]["z"] == 1.0
+    assert z["base"] == "fit"  # a zoom the assistant sets is relative to the whole clip, like the buttons
+    assert run_tool(ctx, "set_framing", {"slot_id": 1, "fill_screen": True})["framing"]["base"] == "fill"
+    assert run_tool(ctx, "set_framing", {"slot_id": 1, "fill_screen": False})["framing"]["base"] == "fit"
     assert "Unknown preset" in run_tool(ctx, "set_framing", {"slot_id": 1, "preset": "spin"})["error"]
     p = run_tool(ctx, "set_pip", {"slot_id": 2, "position": "bottom-left", "size": 0.4})["slot"]
     assert p["layout"] == "pip" and p["pip"] == {"pos": "bottom-left", "scale": 0.4}

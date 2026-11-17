@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from src.rendering.framing import (
-    MAX_ZOOM, crop_rect, default_framing, framing_filter, is_static, keyframe_at, normalize,
+    MAX_ZOOM, clip_graph, crop_rect, default_framing, framing_filter, is_default, is_static, keyframe_at, normalize,
+    uses_fit,
 )
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
@@ -118,3 +119,50 @@ def test_output_size_matches_the_target_box(stripes, tmp_path):
     size = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                            "stream=width,height", "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout
     assert size.strip() == "1080,960"
+
+
+# ----------------------------------------------------------------------------- fit mode (the whole clip, blurred backdrop)
+def test_base_is_fit_by_default_and_old_zoomed_framings_keep_filling():
+    assert normalize(None)["base"] == "fit" and default_framing()["base"] == "fit"
+    assert normalize({"start": {"z": 1}, "end": {"z": 1}})["base"] == "fit"  # an old untouched framing
+    assert normalize({"start": {"z": 1.6}, "end": {"z": 1.6}})["base"] == "fill"  # the user zoomed it back then
+    assert normalize({"base": "fill", "start": {"z": 1}})["base"] == "fill"
+    assert normalize({"base": "nonsense"})["base"] == "fit"
+    assert is_default({"base": "fill"}) and is_default(None) and not is_default({"start": {"z": 2}})
+
+
+def test_a_clip_with_the_boxs_own_shape_needs_no_backdrop():
+    assert uses_fit(None) and uses_fit(None, 1920, 1080, 1080, 1920)
+    assert not uses_fit(None, 1080, 1920, 1080, 1920)  # vertical clip in the 9:16 frame: fit == fill
+    assert not uses_fit({"base": "fill"}, 1920, 1080, 1080, 1920)
+
+
+def render_graph(clip: Path, framing, out: Path, tw=1080, th=1920) -> Path:
+    graph = clip_graph(framing, DUR, tw, th, 1920, 1080, FPS, "0:v", "s", 1)
+    ff("-i", str(clip), "-filter_complex", graph + ";[s]format=yuv420p[v]", "-map", "[v]", "-c:v", "libx264",
+       "-crf", "12", str(out))
+    return out
+
+
+@needs_ffmpeg
+def test_fit_shows_the_whole_clip_with_a_blurred_backdrop(stripes, tmp_path):
+    out = render_graph(stripes, None, tmp_path / "fit.mp4")
+    # the clip is 1080 wide x 607 tall in the middle: both outer stripes are visible, nothing is cut
+    assert near(pixel(out, 10, 10, 960), RED) and near(pixel(out, 10, 540, 960), GREEN) and near(pixel(out, 10, 1070, 960), BLUE)
+    assert not near(pixel(out, 10, 10, 960 - 400), RED, 40)  # above the clip: the soft backdrop, not the sharp stripe
+    old = render_framed(stripes, default_framing(), tmp_path / "fill.mp4")  # the fill path crops the stripes away
+    assert near(pixel(old, 10, 10, 960), GREEN)
+    size = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                           "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout
+    assert size.strip() == "1080,1920"
+
+
+@needs_ffmpeg
+def test_fit_zoomed_past_the_box_pans_and_an_animated_zoom_renders(stripes, tmp_path):
+    for x, colour in ((0.0, RED), (1.0, BLUE)):  # z=3: the clip is 3240 wide in a 1080 box
+        fr = {"base": "fit", "start": {"z": 3, "x": x, "y": 0.5}, "end": {"z": 3, "x": x, "y": 0.5}}
+        assert near(pixel(render_graph(stripes, fr, tmp_path / f"p{x}.mp4"), 10, 540, 960), colour), f"pan {x}"
+    anim = render_graph(stripes, {"base": "fit", "start": {"z": 1, "x": .5, "y": .5}, "end": {"z": 1.5, "x": .5, "y": .5}},
+                        tmp_path / "anim.mp4", tw=1080, th=960)  # the split box
+    assert near(pixel(anim, 0, 10, 480), RED)  # first frame: the whole clip, red stripe at the edge
+    assert near(pixel(anim, int(DUR * FPS) - 1, 540, 480), GREEN)
