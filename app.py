@@ -612,6 +612,55 @@ def cleanup_summary(job: Path) -> None:
                + ", ".join(f"{k} {v:g} s" for k, v in report.get("seconds", {}).items()))
 
 
+def cuts_summary(job: Path) -> None:
+    """What the silence/retake cutting did: how much time it removed, and how many cuts were applied."""
+    report = workflow.read_cuts_report(job)
+    if not report:
+        return
+    st.success(f"Cut {report['removed_s']:.1f}s of silences/retakes ({len(report['cuts'])} cut"
+               f"{'s' if len(report['cuts']) != 1 else ''}); new length {mmss(report['new_duration'])}.")
+    st.caption("Taking 'Cut silences & retakes' off (the checkbox above) goes back to the video from before.")
+
+
+CUT_KIND_LABEL = {"silence": "silence", "stutter": "stutter", "retake": "retake"}
+
+
+def cuts_preview_panel(job: Path) -> bool:
+    """The candidate-cut review list, shown once after analysis and before anything is cut. Returns True while the
+    review is still open, so the caller can st.stop() and not render the steps below it yet."""
+    candidates = workflow.read_cuts_preview(job)
+    if candidates is None:
+        return False
+    st.subheader("Review the cuts")
+    n_selected = sum(1 for c in candidates if c["selected"])
+    st.caption(f"{n_selected} of {len(candidates)} will be cut. Untick anything you want to keep, listen with the "
+               "play button, then apply (or skip to keep everything as it is).")
+    video = workflow.source_video_path(job)
+    for c in candidates:
+        cols = st.columns([0.06, 0.54, 0.4])
+        checked = cols[0].checkbox("cut", value=c["selected"], key=f"cutsel_{c['id']}", label_visibility="collapsed")
+        if checked != c["selected"]:
+            workflow.set_cut_selection(job, c["id"], checked)
+            st.rerun()
+        label = f"{c['start']:.1f}s–{c['end']:.1f}s · {CUT_KIND_LABEL.get(c['kind'], c['kind'])}"
+        if c.get("text"):
+            label += f'  "{c["text"]}"'
+        cols[1].write(label)
+        if video is not None:
+            cols[2].audio(str(video), start_time=max(0.0, c["start"] - 0.3), end_time=c["end"] + 0.3)
+    col1, col2 = st.columns(2)
+    if col1.button("Apply cuts", type="primary", disabled=n_selected == 0):
+        try:
+            workflow.apply_cuts(job, log=lambda m: None)
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            fail(exc)
+    if col2.button("Skip (keep everything)"):
+        workflow.dismiss_cut_preview(job)
+        st.rerun()
+    return True
+
+
 def run_analysis(draft: Path) -> None:
     """Transcribe the video and ask Gemini how many B-rolls suit it; preset the count slider with the answer.
     With the cleanup ticked it first removes background noise and evens out the voice (a bit longer)."""
@@ -637,6 +686,10 @@ if job is None:
         help="Removes background noise and evens out the voice, then works on the cleaned video. Nothing is cut: "
              "edit out pauses and retakes before uploading. The picture is copied as it is. "
              "The original is kept; untick this to go back to it.")
+    cut_toggle = st.checkbox(
+        "Cut silences & retakes (you'll review before anything is applied)", key="cut_silences_th",
+        help="Finds long pauses and retakes (a line said twice, a stuck word) to remove. Nothing is cut "
+             "automatically: you get a list to review, listen to and uncheck anything you want to keep first.")
     up = st.file_uploader("Upload a raw video (about 1-2 minutes)", type=["mp4", "mov", "mkv", "m4v"])
     local = st.text_input("...or the path of a video already on this PC", placeholder=r"D:\vids\my_video.mp4")
     local_path = local.strip().strip('"')
@@ -651,9 +704,10 @@ if job is None:
     if sig and draft is None and st.session_state.get("failed_sig") != sig:
         try:
             if up:
-                draft = workflow.create_job_from_upload(up.name, up.getbuffer(), spoken, clean=clean)
+                draft = workflow.create_job_from_upload(up.name, up.getbuffer(), spoken, clean=clean,
+                                                        cut_silences=cut_toggle)
             else:
-                draft = workflow.create_job(local_path, spoken, clean=clean)
+                draft = workflow.create_job(local_path, spoken, clean=clean, cut_silences=cut_toggle)
             st.session_state.update(draft_job=str(draft), draft_sig=sig)
             st.session_state.pop("failed_sig", None)
             run_analysis(draft)
@@ -666,6 +720,9 @@ if job is None:
     elif draft and bool(workflow.read_job_meta(draft).get("clean_talking_head")) != clean:  # cleanup toggled
         workflow.set_cleanup(draft, clean)
         run_analysis(draft)
+    elif draft and bool(workflow.read_job_meta(draft).get("cut_silences")) != cut_toggle:  # cut toggle changed
+        workflow.set_cut_silences(draft, cut_toggle)
+        run_analysis(draft)
     elif draft and st.session_state.get("analysis_failed"):
         if st.button("Retry analysis"):
             run_analysis(draft)
@@ -673,6 +730,10 @@ if job is None:
     draft_meta = workflow.read_job_meta(draft) if draft else {}
     if draft and draft_meta.get("cleaned"):
         cleanup_summary(draft)
+    if draft and draft_meta.get("cuts_applied"):
+        cuts_summary(draft)
+    if draft and cuts_preview_panel(draft):
+        st.stop()
     st.subheader("2. Pick a video style")
     style = st.radio("Video style", list(STYLES), format_func=STYLE_LABELS.get, key="style",
                      label_visibility="collapsed")
@@ -760,6 +821,10 @@ for message in st.session_state.pop("flash", []):
 if workflow.read_cleanup_report(job):
     with st.expander("Audio cleanup report"):
         cleanup_summary(job)
+
+if workflow.read_cuts_report(job):
+    with st.expander("Cuts report (silences & retakes)"):
+        cuts_summary(job)
 
 with st.expander("Video style (overlay, split or hybrid)"):
     cur_style = meta.get("style", "overlay")

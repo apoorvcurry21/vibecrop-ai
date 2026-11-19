@@ -179,8 +179,8 @@ call (the cached caption text is re-split into shorter lines instead).
 
 ### Audio cleanup
 
-Tick **Clean the audio** above the uploader (for a raw take straight from the camera). Nothing is cut: edit out pauses
-and retakes yourself before uploading. Before anything else happens:
+Tick **Clean the audio** above the uploader (for a raw take straight from the camera). This step itself never cuts
+anything (see *Cutting silences & retakes* below for that, as a separate opt-in toggle). Before anything else happens:
 
 1. The audio is extracted and **background noise is removed** with ffmpeg's `arnndn` (RNNoise, runs on the CPU). It
    needs a 300 KB model file that is downloaded once into `./models` (`VIBECROP_MODELS_DIR`; never committed). If that
@@ -196,6 +196,24 @@ the noise was removed; the checkbox can be unticked to go back to the original.
 Good to know: Groq's free-tier upload limit applies to the raw recording (`MAX_VIDEO_SECONDS`, default 180 s; raise it
 for longer takes). The cleaned video is deleted after the render with the other temporary files, so a cleaned job
 cannot be rendered again afterwards (untick *Delete temporary clips after render* to keep it).
+
+### Cutting silences & retakes
+
+Tick **Cut silences & retakes**, separate from (and combinable with) *Clean the audio*. Nothing is cut automatically:
+after analysis you get a review list of every candidate cut (silence, stutter or retake) with a short inline player
+for each and a checkbox to keep/remove it, then press **Apply cuts** (or **Skip** to keep everything).
+
+- **Silences**: found straight from the audio (`src/audio_cleanup/silence.py`), independent of the transcript's word
+  timestamps on purpose — on Hindi/Hinglish they are not precise enough, which is why an earlier version of this
+  feature under-cut almost everything. Pauses of about 0.3 s or more are candidates; a small pad is left on both
+  sides so speech keeps a natural breath.
+- **Stutters and retakes**: found straight from the transcript (`src/audio_cleanup/retakes.py`), pattern-matching
+  only (a repeated word/phrase, or a sentence restarted right after a failed attempt) — no AI call.
+- Applying cuts re-encodes the video once (`src/audio_cleanup/cuts.py`): every kept piece is forced to a constant
+  frame rate before it is trimmed and concatenated (a variable-rate source is what caused multi-second stutters the
+  first time this was tried), and every audio piece gets a short fade instead of a hard edge (what caused clicks).
+- The transcript, B-roll suggestion and everything else re-point at the shorter result; a **report** shows how much
+  was removed, and the checkbox can be unticked to go back to the video from before the cuts.
 
 ### Sound effects
 
@@ -279,7 +297,7 @@ src/
   rendering/       # Phase 3-5 (compose.py = layouts, framing.py = zoom/pan maths, preview.py = editor previews,
                    #           ass.py = caption/credit/text subtitles)
   captions/        # chunks.py, rewrite.py, styles.py (the 3 caption presets + word emphasis)
-  audio_cleanup/   # pipeline.py (the audio cleanup), denoise.py, voice.py
+  audio_cleanup/   # pipeline.py (the audio cleanup), denoise.py, voice.py, silence.py + retakes.py + cuts.py (cutting)
   sfx/            # catalog.py (what to download), library.py (index + fuzzy name lookup), fetch.py (YouTube / by name)
   assistant/       # chat: agent.py (Gemini tool-calling loop), tools.py + media_tools.py + caption_tools.py + sound_tools.py (what it can do),
                    #       snapshots.py (undo), ytclip.py / media.py / fetch.py (clips and pictures), ui.py (panel)

@@ -15,6 +15,7 @@ from src.fileio import write_json_atomic
 from src.planning import pipeline as planning
 from src.planning import recommend
 from src.sfx import library as sfx_library
+from src.audio_cleanup import cuts as audio_cuts
 from src.audio_cleanup import pipeline as audio_cleanup
 from src.planning.layouts import LAYOUTS, STYLES, assign_layouts
 from src.planning.prompt import INTRO_SAFE_S
@@ -75,12 +76,13 @@ def source_video_path(job_dir: Path) -> Path | None:
 
 def create_job(video_path: str | Path, language: str, copy_into_job: bool = False,
                root: Path | None = None, total: int | None = None, notes: str = "",
-               style: str = "overlay", clean: bool = False) -> Path:
+               style: str = "overlay", clean: bool = False, cut_silences: bool = False) -> Path:
     """Create a job folder for a video. `copy_into_job=True` is for uploads (the copy is purged on cleanup).
 
     `total` (1-15) is how many B-rolls to plan; `notes` are optional creator hints for the AI;
     `style` is the video style: "overlay", "split" or "hybrid" (see planning/layouts.py).
-    `clean=True` runs the audio cleanup (noise removal, voice polish; no cuts) when the job is analysed."""
+    `clean=True` runs the audio cleanup (noise removal, voice polish; no cuts) when the job is analysed.
+    `cut_silences=True` finds silences and retakes to cut (reviewed before anything is applied; see apply_cuts)."""
     if style not in STYLES:
         raise WorkflowError(f"Unknown video style '{style}'. Choose one of: {', '.join(STYLES)}.")
     video_path = Path(video_path)
@@ -91,19 +93,21 @@ def create_job(video_path: str | Path, language: str, copy_into_job: bool = Fals
     if copy_into_job:
         source = job / f"source{video_path.suffix.lower() or '.mp4'}"
         shutil.copyfile(video_path, source)
-    _init_job_meta(job, source, video_path.name, language, total, notes, style, clean)
+    _init_job_meta(job, source, video_path.name, language, total, notes, style, clean, cut_silences)
     return job
 
 
 def _init_job_meta(job: Path, source: Path, source_name: str, language: str, total: int | None, notes: str,
-                   style: str, clean: bool = False) -> None:
+                   style: str, clean: bool = False, cut_silences: bool = False) -> None:
     write_job_meta(job, source_video=str(source), language=language, source_name=source_name,
                    total_brolls=config.clamp_brolls(config.total_brolls() if total is None else total),
-                   notes=" ".join((notes or "").split()), style=style, clean_talking_head=bool(clean))
+                   notes=" ".join((notes or "").split()), style=style, clean_talking_head=bool(clean),
+                   cut_silences=bool(cut_silences))
 
 
 def create_job_from_upload(filename: str, data, language: str, root: Path | None = None, total: int | None = None,
-                           notes: str = "", style: str = "overlay", clean: bool = False) -> Path:
+                           notes: str = "", style: str = "overlay", clean: bool = False,
+                           cut_silences: bool = False) -> Path:
     """Like `create_job(copy_into_job=True)` for a browser upload, but the bytes go straight into the job folder.
     `data` is bytes or a memoryview (e.g. `UploadedFile.getbuffer()`): no staging file, one write instead of two."""
     if style not in STYLES:
@@ -112,7 +116,7 @@ def create_job_from_upload(filename: str, data, language: str, root: Path | None
     job = config.new_job_dir(name, root=jobs_root(root).parent)
     source = job / f"source{Path(name).suffix.lower() or '.mp4'}"
     source.write_bytes(data)
-    _init_job_meta(job, source, name, language, total, notes, style, clean)
+    _init_job_meta(job, source, name, language, total, notes, style, clean, cut_silences)
     return job
 
 
@@ -129,11 +133,25 @@ def analyse(job_dir: Path, log: Callable[[str], None] = print) -> dict:
             result = audio_cleanup.clean(job_dir, video, meta["language"], log=log)
         write_json_atomic(job_dir / "transcript.json", result["transcript"])
         write_job_meta(job_dir, original_video=str(video), source_video=str(result["video"]), cleaned=True)
+        meta = read_job_meta(job_dir)
     elif not (job_dir / "transcript.json").is_file():
         log("Transcribing audio with Groq Whisper...")
         with perf.stage(job_dir, "transcribe"):
             transcription.run(video, meta["language"], job_dir=job_dir)
     transcript = json.loads((job_dir / "transcript.json").read_text(encoding="utf-8"))
+    if meta.get("cut_silences") and not meta.get("cuts_detected"):
+        log("Looking for silences and retakes to cut...")
+        video = source_video_path(job_dir)
+        with perf.stage(job_dir, "cuts_detect"):
+            det_audio = audio_cuts.prepare_detection_audio(video, job_dir, already_denoised=bool(meta.get("cleaned")),
+                                                           log=log)
+            try:
+                candidates = audio_cuts.detect_cuts(det_audio, transcript.get("words", []),
+                                                    float(transcript.get("video_duration") or transcript.get("duration") or 0.0))
+            finally:
+                det_audio.unlink(missing_ok=True)
+        write_json_atomic(job_dir / "cuts_preview.json", {"cuts": candidates})
+        write_job_meta(job_dir, cuts_detected=True, cuts_applied=False, pre_cut_video=str(video))
     log("Asking Gemini how many B-rolls suit this video...")
     with perf.stage(job_dir, "recommend_count"):
         suggestion = recommend.recommend_count(transcript)
@@ -152,14 +170,16 @@ def set_language(job_dir: Path, language: str) -> None:
 
 
 def _reset_derived(job_dir: Path) -> None:
-    """Forget everything computed from the transcript (plan, clips, caption caches, the AI's suggestion)."""
-    for name in ("transcript.json", "plan.json", "final.mp4"):
+    """Forget everything computed from the transcript (plan, clips, caption caches, the AI's suggestion, any
+    not-yet-applied cut preview)."""
+    for name in ("transcript.json", "plan.json", "final.mp4", "cuts_preview.json"):
         (job_dir / name).unlink(missing_ok=True)
     for cache in job_dir.glob("captions_*.json"):
         cache.unlink()
     shutil.rmtree(job_dir / "clips", ignore_errors=True)
     meta = read_job_meta(job_dir)
-    for key in ("suggested_brolls", "suggested_reason", "suggested_source"):
+    for key in ("suggested_brolls", "suggested_reason", "suggested_source", "cuts_detected", "cuts_applied",
+               "pre_cut_video"):
         meta.pop(key, None)
     write_json_atomic(job_dir / "job.json", meta)
 
@@ -174,9 +194,91 @@ def set_cleanup(job_dir: Path, enabled: bool) -> None:
     if meta.get("cleaned") and meta.get("original_video"):
         updates["source_video"] = meta["original_video"]
     write_job_meta(job_dir, **updates)
-    (job_dir / "source_clean.mp4").unlink(missing_ok=True)
-    (job_dir / "cleanup_report.json").unlink(missing_ok=True)
+    for name in ("source_clean.mp4", "cleanup_report.json", "source_cut.mp4", "cuts_report.json"):
+        (job_dir / name).unlink(missing_ok=True)
     _reset_derived(job_dir)
+
+
+def set_cut_silences(job_dir: Path, enabled: bool) -> None:
+    """Turn silence/retake cutting on or off for a job that was only analysed. Turning it off after cuts were
+    applied goes back to the video from right before they were cut; either way the next `analyse` re-detects."""
+    meta = read_job_meta(job_dir)
+    if bool(meta.get("cut_silences")) == bool(enabled):
+        return
+    updates: dict = {"cut_silences": bool(enabled), "cuts_detected": False, "cuts_applied": False}
+    if meta.get("cuts_applied") and meta.get("pre_cut_video"):
+        updates["source_video"] = meta["pre_cut_video"]
+    write_job_meta(job_dir, **updates)
+    for name in ("cuts_preview.json", "source_cut.mp4", "cuts_report.json"):
+        (job_dir / name).unlink(missing_ok=True)
+    _reset_derived(job_dir)
+
+
+def read_cuts_preview(job_dir: Path) -> list[dict] | None:
+    """Candidate cuts awaiting review, or None once they are applied/dismissed (or never detected)."""
+    f = job_dir / "cuts_preview.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))["cuts"] if f.is_file() else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def set_cut_selection(job_dir: Path, cut_id: int, selected: bool) -> None:
+    """Check/uncheck one candidate cut in the review list."""
+    cuts = read_cuts_preview(job_dir)
+    if cuts is None:
+        raise WorkflowError("There is no cut preview to edit for this job.")
+    for c in cuts:
+        if c["id"] == cut_id:
+            c["selected"] = bool(selected)
+            break
+    else:
+        raise WorkflowError(f"No candidate cut with id {cut_id}.")
+    write_json_atomic(job_dir / "cuts_preview.json", {"cuts": cuts})
+
+
+def dismiss_cut_preview(job_dir: Path) -> None:
+    """Keep everything: close the review without cutting anything."""
+    (job_dir / "cuts_preview.json").unlink(missing_ok=True)
+    write_job_meta(job_dir, cuts_applied=True)
+
+
+def apply_cuts(job_dir: Path, log: Callable[[str], None] = print) -> dict:
+    """Cut the selected candidates out of the job's video and re-point everything (transcript, B-roll suggestion)
+    at the shorter result."""
+    candidates = read_cuts_preview(job_dir)
+    if candidates is None:
+        raise WorkflowError("There is no cut preview to apply for this job.")
+    meta = read_job_meta(job_dir)
+    video = source_video_path(job_dir)
+    if video is None:
+        raise WorkflowError("The source video for this job is missing.")
+    transcript = json.loads((job_dir / "transcript.json").read_text(encoding="utf-8"))
+    duration = float(transcript.get("video_duration") or transcript.get("duration") or 0.0)
+    out = job_dir / "source_cut.mp4"
+    log("Cutting silences and retakes...")
+    with perf.stage(job_dir, "cuts_apply"):
+        result = audio_cuts.apply_cuts(video, duration, candidates, transcript, out, job_dir)
+    write_json_atomic(job_dir / "transcript.json", result["transcript"])
+    write_job_meta(job_dir, source_video=str(result["video"]), cuts_applied=True)
+    (job_dir / "cuts_preview.json").unlink(missing_ok=True)
+    write_json_atomic(job_dir / "cuts_report.json", {"removed_s": result["removed_s"],
+                                                     "new_duration": result["transcript"]["video_duration"],
+                                                     "cuts": [c for c in candidates if c.get("selected", True)]})
+    log("Asking Gemini how many B-rolls suit this video...")
+    with perf.stage(job_dir, "recommend_count"):
+        suggestion = recommend.recommend_count(result["transcript"])
+    write_job_meta(job_dir, suggested_brolls=suggestion["count"], suggested_reason=suggestion["reason"],
+                   suggested_source=suggestion["source"], video_duration=result["transcript"]["video_duration"])
+    return result
+
+
+def read_cuts_report(job_dir: Path) -> dict | None:
+    f = job_dir / "cuts_report.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
+    except (OSError, ValueError):
+        return None
 
 
 def read_cleanup_report(job_dir: Path) -> dict | None:
