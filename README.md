@@ -106,7 +106,7 @@ minute. Switch it off with `RELEVANCE_CHECK=0`.
 overlay for roughly the first 3 seconds; the review page's **Opening hook** panel lets you pick another, write your
 own or remove it. It is an ordinary text overlay, so the chat can restyle or move it.
 
-Known limits: the clip check is a judgement from two frames, so it can still miss (use the Phase 4 "Regenerate");
+Known limits: the clip check is a judgement from a few frames, so it can still miss (use the Phase 4 "Regenerate");
 some YouTube videos carry their own burned-in captions or watermarks; footage is third-party and copyrighted
 (credited, but you are responsible for how you publish it); YouTube may block downloads from cloud IPs.
 The planner only plans video. To use a picture or a clip of your own, open **Add your own picture or video** on the

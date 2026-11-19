@@ -1,5 +1,5 @@
-"""The clip relevance check: a light Gemini model looks at two frames of each downloaded clip. Gemini and yt-dlp are mocked;
-ffmpeg runs for real on a synthetic clip."""
+"""The clip relevance check: a light Gemini model looks at a few frames of each downloaded clip. Gemini and yt-dlp are
+mocked; ffmpeg runs for real on a synthetic clip."""
 import json
 import shutil
 import subprocess
@@ -40,9 +40,9 @@ def client(*script):
 
 
 @needs_ffmpeg
-def test_two_small_frames_are_cut_from_the_clip(tmp_path):
+def test_small_frames_are_cut_from_the_clip(tmp_path):
     frames = relevance.extract_frames(make_clip(tmp_path / "c.mp4"), 5.0)
-    assert len(frames) == 2 and all(f[:2] == b"\xff\xd8" for f in frames)  # JPEG magic bytes
+    assert len(frames) == len(relevance.FRAME_POINTS) and all(f[:2] == b"\xff\xd8" for f in frames)  # JPEG magic bytes
     assert relevance.extract_frames(tmp_path / "missing.mp4", 5.0) == []
 
 
@@ -56,13 +56,14 @@ def test_a_fitting_clip_is_kept_and_an_unrelated_one_is_flagged_with_the_reason(
 
 
 @needs_ffmpeg
-def test_gemini_gets_the_meaning_the_query_and_two_pictures(tmp_path):
+def test_gemini_gets_the_meaning_the_query_and_the_pictures(tmp_path):
     c = client({"match": True, "reason": "ok"})
     relevance.Checker(c, models=["m"]).check(make_clip(tmp_path / "c.mp4"), 5.0, "he scores a goal", "football goal")
     model, contents = c.models.calls[0]
     parts = contents[0].parts
     assert "he scores a goal" in parts[0].text and "football goal" in parts[0].text
-    assert len(parts) == 3 and all(p.inline_data.mime_type == "image/jpeg" for p in parts[1:])
+    assert len(parts) == 1 + len(relevance.FRAME_POINTS) and all(
+        p.inline_data.mime_type == "image/jpeg" for p in parts[1:])
 
 
 @needs_ffmpeg

@@ -1,8 +1,8 @@
 """Does a downloaded clip actually show what the speaker is talking about?
 
-The clip window is picked blindly (youtube.pick_window), so some clips are off-topic. After a download we cut two small
-frames out of the clip and ask a light Gemini model "does this fit this moment?". A "no" makes the sourcing code try
-the next candidate video.
+The clip window is picked blindly (youtube.pick_window), so some clips are off-topic. After a download we cut a few
+small frames out of the clip and ask a light Gemini model "does this fit this moment?". A "no" makes the sourcing code
+try the next candidate video.
 
 It must never make things worse, so every problem (no key, quota, timeout, unreadable frames) means "unknown" and the
 clip is kept. After a couple of failures in a row the check pauses for a minute instead of slowing every slot down."""
@@ -22,14 +22,14 @@ from src.gemini_client import GeminiError, generate_with_fallback, make_client
 
 CHECK_TIMEOUT_MS = 20_000  # a stalled answer must not hold a slot up
 MAX_MODELS = 2  # the first two models of the chat chain (both light and fast)
-FRAME_POINTS = (0.25, 0.7)  # where in the clip the two frames are taken (fraction of its length)
+FRAME_POINTS = (0.25, 0.5, 0.7)  # where in the clip the frames are taken (fraction of its length)
 FRAME_WIDTH = 480
 FAILURES_BEFORE_PAUSE = 2
 PAUSE_S = 60.0
 MAX_RETRY_WAIT_S = 2.0
 
 SYSTEM_PROMPT = ("You are a fair assistant video editor checking B-roll footage for a short vertical reel. "
-                 "You are shown two frames from one candidate clip.")
+                 "You are shown a few frames from one candidate clip.")
 
 
 class Verdict(BaseModel):
