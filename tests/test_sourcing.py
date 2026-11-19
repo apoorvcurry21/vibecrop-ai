@@ -19,7 +19,7 @@ def test_pick_window_clamps_inside_short_videos():
     assert end <= 35.0 and start >= 0.0
 
 
-def test_search_filters_short_long_live_and_skipped(monkeypatch):
+def test_search_filters_long_live_and_skipped_shorts_come_first(monkeypatch):
     entries = [
         {"id": "short", "duration": 10},
         {"id": "long", "duration": 9000},
@@ -27,6 +27,7 @@ def test_search_filters_short_long_live_and_skipped(monkeypatch):
         {"id": "seen", "duration": 100},
         {"id": "good", "duration": 100, "title": "T", "channel": "C"},
         {"id": "nodur", "duration": None},
+        {"id": "tiny", "duration": 1},
     ]
 
     class FakeYDL:
@@ -40,7 +41,9 @@ def test_search_filters_short_long_live_and_skipped(monkeypatch):
     import yt_dlp
     monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
     out = yt.search_candidates("q", skip_ids={"seen"})
-    assert [c["id"] for c in out] == ["good"] and out[0]["channel"] == "C"
+    # "tiny" (1s, below MIN_SOURCE_S) and "long" (above MAX_SOURCE_S) are filtered out; the Short ("short")
+    # is kept and ranked ahead of the regular-length video ("good") even though it was found second.
+    assert [c["id"] for c in out] == ["short", "good"] and out[1]["channel"] == "C"
 
 
 def _fake_env(monkeypatch, tmp_path, fail_ids=(), duration=4.5):

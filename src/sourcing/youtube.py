@@ -5,11 +5,12 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-MIN_SOURCE_S = 30.0  # skip tiny clips/shorts (often logos, memes or vertical already)
+MIN_SOURCE_S = 2.0  # just enough to reject degenerate (near-zero) results; Shorts are welcome
+SHORT_MAX_S = 60.0  # classic YouTube Shorts length: tailor-made vertical footage, no filler intro to skip past
 MAX_SOURCE_S = 1200.0  # skip very long videos (streams, full matches): slow and mostly filler
 SEARCH_N = 10
 MAX_DOWNLOAD_TRIES = 3
-WINDOW_FRACTION = 0.25  # start ~25% in: past intros/logos, usually in real footage
+WINDOW_FRACTION = 0.25  # for long videos, start ~25% in: past intros/logos, usually in real footage
 PAD_S = 4.0  # extra footage beyond the slot: the editor can lengthen a slot a little without re-downloading
 # Video-only (so the clip is silent by construction), up to 1080p, H.264 preferred.
 VIDEO_FORMAT = (
@@ -23,9 +24,12 @@ class SourcingError(RuntimeError):
 
 
 def pick_window(source_duration: float, slot_seconds: float) -> tuple[float, float]:
-    """Blind 'smart' window: ~25% into the video, clamped so it fits with margin."""
+    """Blind 'smart' window, clamped so it fits with margin.
+
+    A Short has no filler intro to skip past (the whole thing usually IS the content), so it starts right at the
+    beginning. A regular video starts ~25% in, past the usual logo/intro, into real footage."""
     length = slot_seconds + PAD_S
-    start = max(3.0, source_duration * WINDOW_FRACTION)
+    start = 0.5 if source_duration <= SHORT_MAX_S else max(3.0, source_duration * WINDOW_FRACTION)
     start = min(start, max(0.0, source_duration - length - 2.0))
     return round(start, 2), round(start + length, 2)
 
@@ -59,6 +63,8 @@ def search_candidates(query: str, skip_ids: set[str] | frozenset[str] = frozense
             "duration": float(dur),
             "url": e.get("url") or f"https://www.youtube.com/watch?v={vid}",
         })
+    # Shorts first (already vertical, tailor-made footage); YouTube's own relevance order is kept within each group.
+    candidates.sort(key=lambda c: c["duration"] > SHORT_MAX_S)
     return candidates
 
 
