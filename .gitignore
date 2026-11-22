@@ -32,3 +32,22 @@ Thumbs.db
 # Local sound-effect library and model files (copyrighted audio / downloaded models: never commit)
 /sfx/
 /models/
+
+# Flutter (mobcaption app)
+mobile/mobcaption/build/
+mobile/mobcaption/.dart_tool/
+mobile/mobcaption/.flutter-plugins
+mobile/mobcaption/.flutter-plugins-dependencies
+mobile/mobcaption/.packages
+mobile/mobcaption/android/.gradle/
+mobile/mobcaption/android/local.properties
+mobile/mobcaption/android/key.properties
+mobile/mobcaption/**/*.iml
+mobile/mobcaption/smoke_test/build/
+mobile/mobcaption/smoke_test/.dart_tool/
+mobile/mobcaption/smoke_test/android/.gradle/
+mobile/mobcaption/smoke_test/android/local.properties
+
+# ...but the mobcaption apps' own checked-in test/sample assets are intentional, not generated media:
+!mobile/mobcaption/**/assets/*.mp4
+!mobile/mobcaption/**/assets/*.ass

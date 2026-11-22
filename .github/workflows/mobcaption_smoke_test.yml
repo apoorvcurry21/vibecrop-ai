@@ -1,0 +1,38 @@
+name: mobcaption smoke test APK
+
+# Milestone 1/1b of the mobcaption plan: a throwaway app that proves ffmpeg_kit_flutter_new can
+# burn an .ass subtitle file onto video via libass, and measures whether the hardware encoder
+# (h264_mediacodec) works for a 25 Mbps target before falling back to libx264. This is NOT the
+# real mobcaption app — see mobcaption_build.yml for that.
+
+on:
+  push:
+    branches: [mobcaption]
+    paths:
+      - "mobile/mobcaption/smoke_test/**"
+      - ".github/workflows/mobcaption_smoke_test.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build-smoke-test-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/mobcaption/smoke_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - run: flutter test
+
+      - run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobcaption-smoke-test-apk
+          path: mobile/mobcaption/smoke_test/build/app/outputs/flutter-apk/app-release.apk
