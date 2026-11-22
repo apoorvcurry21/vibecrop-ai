@@ -65,4 +65,18 @@ void main() {
       expect(spread[i].end, lessThanOrEqualTo(spread[i + 1].start + 1e-6));
     }
   });
+
+  test('retime carries emphasis over by index when the word count is unchanged, else resets', () {
+    final orig = [
+      const ChunkWord(text: 'a', start: 1.0, end: 1.5, emphasized: true),
+      const ChunkWord(text: 'b', start: 1.5, end: 2.0),
+    ];
+
+    final same = retime('Hello world', 1.0, 2.0, orig);
+    expect(same[0].emphasized, isTrue); // carried over -- same word count, same index
+    expect(same[1].emphasized, isFalse);
+
+    final spread = retime('one two three', 1.0, 2.0, orig);
+    expect(spread.every((w) => !w.emphasized), isTrue); // word count changed -- reset, not fuzzy-matched
+  });
 }

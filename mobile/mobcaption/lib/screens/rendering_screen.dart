@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../captions/styles.dart';
 import '../models/caption_chunk.dart';
 import '../services/caption_pipeline.dart';
 import '../services/video_probe.dart';
@@ -11,6 +12,7 @@ class RenderingScreen extends StatefulWidget {
   final String videoPath;
   final List<CaptionChunk> chunks;
   final VideoProbe probe;
+  final CaptionStyle style;
 
   const RenderingScreen({
     super.key,
@@ -18,6 +20,7 @@ class RenderingScreen extends StatefulWidget {
     required this.videoPath,
     required this.chunks,
     required this.probe,
+    required this.style,
   });
 
   @override
@@ -45,6 +48,7 @@ class _RenderingScreenState extends State<RenderingScreen> {
         videoPath: widget.videoPath,
         chunks: widget.chunks,
         probe: widget.probe,
+        style: widget.style,
         onProgress: (f) {
           if (mounted) setState(() => _progress = f);
         },

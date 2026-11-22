@@ -12,6 +12,14 @@ class ChunkWord {
   final String text;
   final double start;
   final double end;
+  final bool emphasized;
 
-  const ChunkWord({required this.text, required this.start, required this.end});
+  const ChunkWord({required this.text, required this.start, required this.end, this.emphasized = false});
+
+  ChunkWord copyWith({String? text, double? start, double? end, bool? emphasized}) => ChunkWord(
+        text: text ?? this.text,
+        start: start ?? this.start,
+        end: end ?? this.end,
+        emphasized: emphasized ?? this.emphasized,
+      );
 }

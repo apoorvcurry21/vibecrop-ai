@@ -28,13 +28,15 @@ Future<RenderResult> burnCaptions({
   required String assPath,
   required String outputPath,
   required VideoProbe probe,
+  required String fontsDir,
   void Function(double fractionComplete)? onProgress,
 }) async {
   final targetBitrate = probe.bitrateBps > qualityFloorBps ? probe.bitrateBps : qualityFloorBps;
   // Never fabricate frames the source doesn't have, and never force a resize -- the output
   // frame stays exactly the source's own width/height via the subtitles filter alone.
   final fps = probe.fps > 0 ? probe.fps : 30.0;
-  final vf = 'subtitles=$assPath';
+  // fontsdir lets libass find the bundled Hormozi-style font without it being a system font.
+  final vf = 'subtitles=$assPath:fontsdir=$fontsDir';
 
   Future<bool> attempt(String codecArgs) async {
     final out = File(outputPath);

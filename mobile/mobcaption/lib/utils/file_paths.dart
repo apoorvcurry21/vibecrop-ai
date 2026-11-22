@@ -19,6 +19,7 @@ class JobPaths {
   String get audio => '${dir.path}/audio.flac';
   String get overlayAss => '${dir.path}/overlay.ass';
   String get output => '${dir.path}/output.mp4';
+  String get fontsDir => '${dir.path}/fonts';
 
   Future<void> cleanup() async {
     if (await dir.exists()) await dir.delete(recursive: true);

@@ -57,7 +57,12 @@ List<ChunkWord> retime(String text, double start, double end, List<ChunkWord> or
   if (tokens.length == originalWords.length) {
     return [
       for (var i = 0; i < tokens.length; i++)
-        ChunkWord(text: tokens[i], start: originalWords[i].start, end: originalWords[i].end),
+        ChunkWord(
+          text: tokens[i],
+          start: originalWords[i].start,
+          end: originalWords[i].end,
+          emphasized: originalWords[i].emphasized,
+        ),
     ];
   }
   final total = tokens.fold<int>(0, (sum, t) => sum + t.length + 1);

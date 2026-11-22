@@ -1,6 +1,6 @@
-// Port of src/rendering/ass.py, trimmed to what v1 needs: no split-screen layout, no emphasis,
-// no box/pop styles, no credits or text overlays — just the word-by-word highlighted caption
-// line, exactly the "classic form" color markup the desktop app has always used.
+// Port of src/rendering/ass.py, trimmed to what this app needs: no split-screen layout, no
+// credits or text overlays, and emphasis is size-only (no per-word colour override) -- just the
+// three caption styles (classic/hormozi/karaoke_box) and per-word highlight + emphasis markup.
 //
 // One real difference from the desktop app: it hardcodes PlayResX/PlayResY to 1080x1920 because
 // its pipeline always normalizes footage into a vertical reel first. This app does no
@@ -43,17 +43,35 @@ String _styleLine(String name, String font, int size, bool bold, String primary,
       '$marginL,$marginR,$marginV,1';
 }
 
+const double _boxPad = 14; // how far karaoke_box's highlight box reaches around the active word
+
 List<String> captionStyleLines(CaptionStyle st, {required int playResX, required int playResY}) {
   final heightScale = playResY / _tunedForHeight;
   final widthScale = playResX / _tunedForWidth;
   final marginLR = (60 * widthScale).round();
   final marginV = (st.marginV * heightScale).round();
-  return [
-    _styleLine('CaptionLatin', st.font, (st.size * heightScale).round(), st.bold, st.primary, '000000',
-        st.outline * heightScale, st.shadow * heightScale, 2, marginLR, marginLR, marginV),
-    _styleLine('CaptionDeva', _devaFont, (st.sizeDeva * heightScale).round(), true, st.primary, '000000',
-        st.outline * heightScale, st.shadow * heightScale, 2, marginLR, marginLR, marginV),
+  final size = (st.size * heightScale).round();
+  final sizeDeva = (st.sizeDeva * heightScale).round();
+  final outline = st.outline * heightScale;
+  final shadow = st.shadow * heightScale;
+
+  final lines = [
+    _styleLine('CaptionLatin', st.font, size, st.bold, st.primary, '000000', outline, shadow, 2, marginLR, marginLR,
+        marginV),
+    _styleLine(
+        'CaptionDeva', _devaFont, sizeDeva, true, st.primary, '000000', outline, shadow, 2, marginLR, marginLR,
+        marginV),
   ];
+  if (st.box) {
+    // Same size metrics as the base lines, so the box lines up exactly with the word underneath.
+    final boxPad = _boxPad * heightScale;
+    lines.add(_styleLine('ActiveLatin', st.font, size, st.bold, st.active, st.boxColor!, boxPad, 0, 2, marginLR,
+        marginLR, marginV));
+    lines.add(_styleLine(
+        'ActiveDeva', _devaFont, sizeDeva, true, st.active, st.boxColor!, boxPad, 0, 2, marginLR, marginLR,
+        marginV));
+  }
+  return lines;
 }
 
 String header(CaptionStyle st, {required int playResX, required int playResY}) {
@@ -93,25 +111,56 @@ String escape(String text) {
   return cleaned.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).join(' ');
 }
 
-String _wordMarkup(String text, bool active, CaptionStyle st) {
+const double _popFrom = 0.82; // the spoken word starts at this fraction of its size and grows to full size
+const int _popMs = 90;
+const double emphasisScale = 1.35; // desktop's DEFAULT_EMPHASIS_SCALE; fixed since v1 has no size slider
+
+String _scalePct(double x) => x.round().toString();
+
+/// ASS text for one word. `layer` is "base" (the whole line) or "box" (karaoke_box's highlight
+/// layer, where only the spoken word is visible). Both layers carry the same size tags on every
+/// word, so the two lines have the same width/height and the box lines up exactly with its word.
+String _wordMarkup(String text, bool active, bool emphasized, CaptionStyle st, {String layer = 'base'}) {
   var body = escape(text);
   if (st.uppercase) body = body.toUpperCase();
-  final color = active ? st.active : null; // classic.box is always false in v1, so "active" alone gates this
-  if (color == null) return body;
-  // The "classic form": open with the active colour, close back to the style's own primary colour.
-  return '{\\c${bgr(color)}}$body{\\c${bgr(st.primary)}}';
+  final scale = emphasized ? emphasisScale : 1.0;
+  final pop = st.pop && active && layer == 'base';
+
+  var size = '';
+  if (pop) {
+    final base = scale * 100;
+    size = '\\fscx${_scalePct(base * _popFrom)}\\fscy${_scalePct(base * _popFrom)}'
+        '\\t(0,$_popMs,\\fscx${_scalePct(base)}\\fscy${_scalePct(base)})';
+  } else if (scale != 1.0) {
+    size = '\\fscx${_scalePct(scale * 100)}\\fscy${_scalePct(scale * 100)}';
+  }
+
+  if (layer == 'box') {
+    if (!active) return '{\\alpha&HFF&$size}$body{\\r}'; // invisible, but still reserves its space
+    return size.isEmpty ? body : '{$size}$body{\\r}';
+  }
+
+  final color = (active && !st.box) ? st.active : null;
+  final tags = (color != null ? '\\c${bgr(color)}' : '') + size;
+  if (tags.isEmpty) return body;
+  if (color != null && size.isEmpty) {
+    return '{$tags}$body{\\c${bgr(st.primary)}}'; // the long-standing classic form
+  }
+  return '{$tags}$body{\\r}';
 }
 
 /// One event per spoken word: the whole chunk's line is shown, with the currently-active word
-/// recoloured. No split-screen slots and no emphasis overrides in v1, so (unlike the desktop
-/// version) this never needs to cut a word's dialogue line at a layout boundary.
+/// highlighted the way the style says (yellow, green + pop, or a highlight box), and any
+/// user-marked word rendered bigger regardless of which word is currently active.
 List<String> captionEvents(List<CaptionChunk> chunks, CaptionStyle st) {
   final events = <String>[];
   for (var ci = 0; ci < chunks.length; ci++) {
     final chunk = chunks[ci];
     final words = chunk.words;
     if (words.isEmpty) continue;
-    final baseStyle = words.any((w) => _devanagari.hasMatch(w.text)) ? 'CaptionDeva' : 'CaptionLatin';
+    final isDeva = words.any((w) => _devanagari.hasMatch(w.text));
+    final baseStyle = isDeva ? 'CaptionDeva' : 'CaptionLatin';
+    final activeStyle = isDeva ? 'ActiveDeva' : 'ActiveLatin';
     final nextStart =
         (ci + 1 < chunks.length && chunks[ci + 1].words.isNotEmpty) ? chunks[ci + 1].words.first.start : null;
 
@@ -124,8 +173,20 @@ List<String> captionEvents(List<CaptionChunk> chunks, CaptionStyle st) {
       }
       end = math.max(end, start + 0.05);
 
-      final line = [for (var j = 0; j < words.length; j++) _wordMarkup(words[j].text, j == i, st)].join(' ');
+      final line = [
+        for (var j = 0; j < words.length; j++) _wordMarkup(words[j].text, j == i, words[j].emphasized, st)
+      ].join(' ');
       events.add('Dialogue: 1,${assTime(start)},${assTime(end)},$baseStyle,,0,0,0,,$line');
+
+      if (st.box) {
+        // Its own layer: libass pushes overlapping events of the SAME layer apart (so the box
+        // would float above the line), but events on different layers are drawn in place, on top.
+        final boxLine = [
+          for (var j = 0; j < words.length; j++)
+            _wordMarkup(words[j].text, j == i, words[j].emphasized, st, layer: 'box')
+        ].join(' ');
+        events.add('Dialogue: 2,${assTime(start)},${assTime(end)},$activeStyle,,0,0,0,,$boxLine');
+      }
     }
   }
   return events;

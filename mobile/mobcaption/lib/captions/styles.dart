@@ -1,10 +1,13 @@
-// Port of src/captions/styles.py, trimmed to what v1 needs: only the "classic" preset (no style
-// picker, no emphasis/highlight editing), plus fit_chunks for correctness.
+// Port of src/captions/styles.py: the three caption presets (classic, bold_pop/"Hormozi",
+// karaoke_box) plus fit_chunks. No colour/scale picker for emphasis in v1 -- see ass_writer.dart
+// for the fixed emphasis scale, matching the user's "just size, keep it simple" ask.
 
 import '../models/caption_chunk.dart';
 import '../models/word.dart';
 
 class CaptionStyle {
+  final String id;
+  final String label;
   final String font;
   final int size;
   final int sizeDeva;
@@ -17,10 +20,32 @@ class CaptionStyle {
   final String active; // RGB hex, e.g. "FFFF00"
   final bool pop;
   final bool box;
+  final String? boxColor; // RGB hex, only set when box is true
   final int marginV;
 
+  const CaptionStyle({
+    required this.id,
+    required this.label,
+    required this.font,
+    required this.size,
+    required this.sizeDeva,
+    required this.bold,
+    required this.outline,
+    required this.shadow,
+    required this.uppercase,
+    required this.maxWords,
+    required this.primary,
+    required this.active,
+    required this.pop,
+    required this.box,
+    this.boxColor,
+    required this.marginV,
+  });
+
   const CaptionStyle.classic()
-      : font = 'Arial',
+      : id = 'classic',
+        label = 'Classic',
+        font = 'Arial',
         size = 74,
         sizeDeva = 70,
         bold = true,
@@ -32,12 +57,51 @@ class CaptionStyle {
         active = 'FFFF00',
         pop = false,
         box = false,
+        boxColor = null,
         marginV = 400;
+
+  const CaptionStyle.hormozi()
+      : id = 'bold_pop',
+        label = 'Hormozi',
+        font = 'Anton',
+        size = 104,
+        sizeDeva = 84,
+        bold = false,
+        outline = 9,
+        shadow = 3,
+        uppercase = true,
+        maxWords = 3,
+        primary = 'FFFFFF',
+        active = '39FF14',
+        pop = true,
+        box = false,
+        boxColor = null,
+        marginV = 400;
+
+  const CaptionStyle.karaokeBox()
+      : id = 'karaoke_box',
+        label = 'Karaoke box',
+        font = 'Arial',
+        size = 78,
+        sizeDeva = 72,
+        bold = true,
+        outline = 6,
+        shadow = 0,
+        uppercase = false,
+        maxWords = 3,
+        primary = 'FFFFFF',
+        active = '000000',
+        pop = false,
+        box = true,
+        boxColor = 'FFD60A',
+        marginV = 400;
+
+  static const List<CaptionStyle> all = [CaptionStyle.classic(), CaptionStyle.hormozi(), CaptionStyle.karaokeBox()];
 }
 
 /// Splits chunks longer than `maxWords` into balanced pieces (ceil division), same as
-/// styles.py's fit_chunks. A no-op in v1 since chunkWords already caps at 4 == classic.maxWords,
-/// but kept so a future style with a smaller maxWords works without a second pass over the words.
+/// styles.py's fit_chunks. Lets switching to a smaller-maxWords style re-balance already
+/// transcribed chunks without another Groq call.
 List<CaptionChunk> fitChunks(List<CaptionChunk> chunks, int maxWords) {
   final out = <List<ChunkWord>>[];
   for (final chunk in chunks) {

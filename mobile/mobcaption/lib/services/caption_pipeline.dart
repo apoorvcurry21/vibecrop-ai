@@ -12,6 +12,7 @@ import '../models/caption_chunk.dart';
 import '../models/transcript.dart';
 import '../utils/file_paths.dart';
 import 'audio_extractor.dart';
+import 'font_assets.dart';
 import 'groq_transcriber.dart' as groq;
 import 'video_probe.dart';
 import 'video_renderer.dart';
@@ -51,17 +52,19 @@ Future<RenderResult> renderVideo({
   required String videoPath,
   required List<CaptionChunk> chunks,
   required VideoProbe probe,
+  required CaptionStyle style,
   void Function(double fraction)? onProgress,
 }) async {
-  const style = CaptionStyle.classic();
   final events = captionEvents(chunks, style);
   await writeAss(job.overlayAss, events, style, playResX: probe.width, playResY: probe.height);
+  final fontsDir = await ensureFontsDir(job.fontsDir);
 
   return burnCaptions(
     videoPath: videoPath,
     assPath: job.overlayAss,
     outputPath: job.output,
     probe: probe,
+    fontsDir: fontsDir,
     onProgress: onProgress,
   );
 }
