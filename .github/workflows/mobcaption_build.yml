@@ -1,0 +1,36 @@
+name: mobcaption APK
+
+# Builds the real mobcaption app (not the smoke_test throwaway -- see mobcaption_smoke_test.yml).
+
+on:
+  push:
+    branches: [mobcaption]
+    paths:
+      - "mobile/mobcaption/**"
+      - "!mobile/mobcaption/smoke_test/**"
+      - ".github/workflows/mobcaption_build.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/mobcaption
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - run: flutter test
+
+      - run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobcaption-apk
+          path: mobile/mobcaption/build/app/outputs/flutter-apk/app-release.apk
